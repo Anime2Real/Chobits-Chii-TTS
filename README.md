@@ -1,7 +1,7 @@
 # Chobits-Chii-TTS
 
 [![Made with Love](https://img.shields.io/badge/Made%20with-Love-ff69b4.svg)](https://madewithlove.org.in)
-[![GitHub](https://img.shields.io/badge/GitHub-Chobits--Chii--TTS-181717?logo=github)](https://github.com/chenxin199305/Chobits-Chii-TTS)
+[![GitHub](https://img.shields.io/badge/GitHub-Chobits--Chii--TTS-181717?logo=github)](https://github.com/Anime2Real/Chobits-Chii-TTS)
 [![Dataset: Chobits-Chii-Voice](https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Chobits--Chii--Voice-yellow)](https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice)
 [![Hugging Face Model](https://img.shields.io/badge/%F0%9F%A4%97%20Model-Chobits--Chii--TTS-yellow)](https://huggingface.co/chenxin199305/Chobits-Chii-TTS)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
@@ -11,7 +11,7 @@
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 TTS（语音合成）模型项目。
 
-本项目以 [Chobits-Chii-Voice](https://github.com/chenxin199305/Chobits-Chii-Voice) 数据集为训练数据，基于 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 微调出小叽声线的文本转语音模型。
+本项目以 [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) 数据集为训练数据，基于 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 微调出小叽声线的文本转语音模型。
 
 > ⚠️ 注意：原始动画音频的版权归其权利方所有。本项目仅供学习与研究使用，请勿用于商业用途。
 
@@ -24,7 +24,7 @@ https://github.com/user-attachments/assets/06c1976c-84c9-4fd2-b472-d5cdfe9be485
 
 ## 数据
 
-训练数据来自 [Chobits-Chii-Voice](https://github.com/chenxin199305/Chobits-Chii-Voice) 数据集（[Hugging Face](https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice)）：
+训练数据来自 [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) 数据集（[Hugging Face](https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice)）：
 
 | 项目 | 数值 |
 | --- | --- |
@@ -295,5 +295,5 @@ curl -k -G https://<服务器IP>:9880/tts \
 
 ## 相关项目
 
-- [Chobits-Chii-Voice](https://github.com/chenxin199305/Chobits-Chii-Voice) — 小叽语音数据集（本项目的数据来源）
+- [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) — 小叽语音数据集（本项目的数据来源）
 - [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) — 底层语音合成框架
