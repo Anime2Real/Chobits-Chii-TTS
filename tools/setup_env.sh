@@ -1,5 +1,6 @@
 #!/bin/bash
-# 从零搭建小叽 TTS 运行环境 (幂等, 可重复执行).
+# 从零搭建小叽 TTS 训练/本地推理环境 (幂等, 可重复执行).
+# 注: 部署 HTTP 服务不需要本脚本 —— 推理环境在 docker/ 镜像内 (见 docs/deployment.md).
 #
 # 步骤:
 #   1. 安装 Miniconda (~/miniconda3, 清华镜像)

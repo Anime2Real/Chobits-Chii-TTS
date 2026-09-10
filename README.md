@@ -79,6 +79,12 @@ Chobits-Chii-TTS/
 ├── README.md               # 本文件
 ├── LICENSE                 # CC BY-NC-SA 4.0
 ├── .gitignore
+├── requirements.txt        # 门面依赖 (引擎依赖在镜像内安装)
+├── docker/                 # 推理引擎镜像 (GPT-SoVITS api_v2, 无鉴权)
+│   ├── Dockerfile             # conda 环境 + 锁定 commit 的引擎源码 + 运行数据
+│   └── entrypoint.sh          # 模型就位检查/下载 + 生成推理配置 + 拉起 api_v2
+├── docs/
+│   └── deployment.md          # 服务器部署实录 (docker/systemd/TLS/验证/迁移)
 ├── data/                   # 清洗后的训练数据 (由 tools/clean_dataset.py 生成)
 │   ├── wavs/                  # 483 个音频片段 (不入库, 由脚本从 Chobits-Chii-Voice 复制)
 │   ├── metadata.csv           # 文件名|文本
@@ -87,8 +93,8 @@ Chobits-Chii-TTS/
 ├── tools/                  # 工具脚本
 │   ├── clean_dataset.py       # 数据集清洗 (修复 Whisper 误转写, 剔除脏条目)
 │   ├── setup_env.sh           # 环境一键搭建 (Miniconda + install.sh + 版本修复, 幂等)
-│   ├── server.py              # TTS HTTP 服务 (api_v2 + API Key 鉴权 + 限流)
-│   └── start_tts_api.sh       # 启动 TTS 服务 (可直接运行或供 systemd 调用)
+│   ├── server.py              # TTS HTTP 门面 (API Key 鉴权 + 限流 + OpenAI 垫片, 代理容器内引擎)
+│   └── start_tts_api.sh       # 启动门面 (可直接运行或供 systemd 调用)
 ├── training/               # 训练流水线
 │   └── train_chii.py          # 预处理 + SoVITS/GPT 微调一键驱动 (幂等, 可续跑)
 ├── examples/               # 示例
@@ -194,55 +200,31 @@ pyopenjtalk 加载新版 libstdc++（Ubuntu 20.04 系统库缺 `GLIBCXX_3.4.29`�
 
 ## 部署为 HTTP 服务
 
-推理只需要[模型文件](#模型文件)中的权重与环境（`tools/setup_env.sh` 一键搭建），无需训练数据。
+推理只需要[模型文件](#模型文件)中的权重，无需训练数据。部署采用与家族其他服务一致的引擎/门面分离架构：
+
+- **引擎**（Docker 容器）：上游 GPT-SoVITS `api_v2`，加载 chii 权重做合成，无鉴权，只发布到 `127.0.0.1:9882`
+- **门面**（宿主机 `tools/server.py`）：唯一对外入口，API Key 鉴权 + 每 IP 限流 + OpenAI TTS 垫片 + 可选 TLS，监听 `0.0.0.0:9880`
 
 ```bash
-# 启动服务 (0.0.0.0:9880, 加载 models/ 下 e10 权重, v2Pro + cuda fp16)
-# 服务为 tools/server.py: 在上游 api_v2 前加了 API Key 鉴权与限流
+# 1. 构建引擎镜像 (国内网络建议加镜像 build-arg, 见 docs/deployment.md)
+docker build -t chobits-chii-tts-engine docker/
+
+# 2. 启动引擎 (复用本仓库已有模型, 零下载; 全新机器的空卷自动下载方式见 deployment.md)
+docker run -d --name chobits-chii-tts-engine \
+  --gpus all --restart unless-stopped \
+  -p 127.0.0.1:9882:9880 \
+  -v $PWD/GPT-SoVITS/GPT_SoVITS/pretrained_models:/data/pretrained_models:ro \
+  -v $PWD/GPT-SoVITS/GPT_SoVITS/text/G2PWModel:/data/G2PWModel:ro \
+  -v $PWD/models:/data/models:ro \
+  chobits-chii-tts-engine
+
+# 3. 启动门面 (0.0.0.0:9880; 首次运行自动建 .venv)
 export CHII_TTS_API_KEY=<随机密钥>   # 必填, 未设置会拒绝启动
 bash tools/start_tts_api.sh 9880
 ```
 
-生产环境建议用 systemd 守护（开机自启 + 崩溃自动重启），密钥通过 `EnvironmentFile` 注入：
-
-```ini
-# /etc/systemd/system/chobits-chii-tts.service
-[Unit]
-Description=Chobits Chii TTS (GPT-SoVITS api_v2)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=ubuntu
-ExecStart=/bin/bash /home/ubuntu/Github/Chobits-Chii-TTS/tools/start_tts_api.sh 9880
-Restart=on-failure
-RestartSec=5
-LimitNOFILE=65536
-EnvironmentFile=/etc/chobits-chii-tts.env
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-# /etc/chobits-chii-tts.env (chmod 600), 内容:
-#   CHII_TTS_API_KEY=<随机密钥>
-#   CHII_TTS_SSL_CERTFILE=/etc/chobits-chii-tts.crt   (可选, 见下方 TLS)
-#   CHII_TTS_SSL_KEYFILE=/etc/chobits-chii-tts.key    (可选, 与上一条同时设置)
-sudo systemctl daemon-reload && sudo systemctl enable --now chobits-chii-tts
-journalctl -u chobits-chii-tts -f   # 查看日志
-```
-
-启用 HTTPS（自签名证书，客户端需信任该证书或用 `-k` 跳过校验）：
-
-```bash
-sudo openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout /etc/chobits-chii-tts.key -out /etc/chobits-chii-tts.crt -days 3650 \
-  -subj "/CN=chii-tts" -addext "subjectAltName=IP:<服务器IP>,IP:127.0.0.1"
-sudo chmod 600 /etc/chobits-chii-tts.key
-# 在 /etc/chobits-chii-tts.env 中设置 CHII_TTS_SSL_CERTFILE / CHII_TTS_SSL_KEYFILE 后重启服务
-```
+生产环境用 systemd 守护门面（密钥经 `EnvironmentFile` 注入）+ docker `--restart` 守护引擎，
+HTTPS（自签名证书）在门面层启用；unit / env 示例与验证步骤见 **[docs/deployment.md](docs/deployment.md)**。
 
 OpenAI TTS 兼容调用（推荐；客户端 `baseUrl` 填 `http(s)://<服务器IP>:9880/v1`，
 `GET /v1/models` 返回固定模型 `chii-tts`，`voice` 当前仅 `chii`，`response_format` 支持
@@ -258,14 +240,15 @@ curl -k -X POST https://<服务器IP>:9880/v1/audio/speech \
 # 未启用 TLS 时把 https 换成 http、去掉 -k 即可
 ```
 
-原生 `/tts` 调用示例（`ref_audio_path` 为服务器上的绝对路径；密钥用 `Authorization: Bearer` 或 `?api_key=` 传递）：
+原生 `/tts` 调用示例（GET query / POST JSON 原样透传到引擎；`ref_audio_path` 为**引擎容器内**路径，
+默认数据卷挂载下即 `/data/models/...`；密钥用 `Authorization: Bearer` 或 `?api_key=` 传递）：
 
 ```bash
 curl -k -G https://<服务器IP>:9880/tts \
   -H "Authorization: Bearer <API_KEY>" \
   --data-urlencode "text=ちぃ、秀樹のこと、大好き。" \
   --data-urlencode "text_lang=ja" \
-  --data-urlencode "ref_audio_path=$PWD/models/ref_audio.wav" \
+  --data-urlencode "ref_audio_path=/data/models/ref_audio.wav" \
   --data-urlencode "prompt_lang=ja" \
   --data-urlencode "prompt_text=秀樹は地位を拾ってくれた" \
   --data-urlencode "media_type=wav" -o out.wav
@@ -273,10 +256,12 @@ curl -k -G https://<服务器IP>:9880/tts \
 ```
 
 其他环境变量：`CHII_TTS_RATE_LIMIT`（`/tts` 与 `/v1/audio/speech` 每 IP 每分钟限流次数，默认 60，0 关闭）；
+`CHII_TTS_ENGINE_URL`（引擎地址，默认 `http://127.0.0.1:9882`）；
 `CHII_TTS_SSL_CERTFILE` / `CHII_TTS_SSL_KEYFILE`（同时设置时以 HTTPS 启动）；
-`CHII_TTS_REF_AUDIO` / `CHII_TTS_REF_TEXT_FILE`（覆盖 OpenAI 垫片 `chii` 音色的参考音频/参考文本路径）。
+`CHII_TTS_REF_AUDIO` / `CHII_TTS_REF_TEXT_FILE`（覆盖 OpenAI 垫片 `chii` 音色的参考音频/参考文本路径，
+前者为容器内路径，后者为宿主机路径）。
 
-注意在云安全组放行 TCP 9880；对外提供服务须遵守 [CC BY-NC-SA 4.0](#许可协议)（非商业）。
+注意在云安全组放行 TCP 9880（9882 只绑回环，无需放行）；对外提供服务须遵守 [CC BY-NC-SA 4.0](#许可协议)（非商业）。
 面向公众分发应用时建议由后端服务代为调用，不要把唯一密钥嵌进客户端。
 
 ## 许可协议

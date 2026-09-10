@@ -1,0 +1,5 @@
+# 门面 (tools/server.py) 依赖: 鉴权/限流 + 反向代理容器内引擎
+# 推理引擎 (GPT-SoVITS api_v2) 的依赖在 docker/Dockerfile 内安装, 不在宿主机
+fastapi
+uvicorn
+httpx

@@ -1,42 +1,18 @@
 #!/bin/bash
-# 启动小叽 TTS HTTP 服务 (tools/server.py: api_v2 + API Key 鉴权 + 限流)
+# 启动小叽 TTS 门面 (tools/server.py: 鉴权 + 限流 + OpenAI 垫片, 反向代理容器内引擎)
 # 用法: bash tools/start_tts_api.sh [端口, 默认 9880]
 # 需要环境变量 CHII_TTS_API_KEY (systemd 从 /etc/chobits-chii-tts.env 读取);
-# MINICONDA 可覆盖 Miniconda 安装路径 (默认 $HOME/miniconda3)
+# 推理引擎在 Docker 容器里 (见 docs/deployment.md), 本脚本只起门面;
+# 首次运行自动在仓库根目录建 .venv 并安装 requirements.txt
 set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GS_ROOT="$REPO_ROOT/GPT-SoVITS"
 PORT="${1:-9880}"
-MINICONDA="${MINICONDA:-$HOME/miniconda3}"
+VENV="$REPO_ROOT/.venv"
 
-# 推理配置 (随 GPT-SoVITS 目录可能被重建, 不存在则按本仓库路径重新生成)
-CONFIG="$GS_ROOT/GPT_SoVITS/configs/tts_infer_chii.yaml"
-if [ ! -f "$CONFIG" ]; then
-    cat > "$CONFIG" <<EOF
-custom:
-  bert_base_path: GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large
-  cnhuhbert_base_path: GPT_SoVITS/pretrained_models/chinese-hubert-base
-  device: cuda
-  is_half: true
-  t2s_weights_path: $REPO_ROOT/models/chii-e10.ckpt
-  version: v2Pro
-  vits_weights_path: $REPO_ROOT/models/chii_e10_s1210.pth
-EOF
+if [ ! -d "$VENV" ]; then
+    python3 -m venv "$VENV"
+    "$VENV/bin/pip" install -r "$REPO_ROOT/requirements.txt"
 fi
 
-# shellcheck disable=SC1091
-source "$MINICONDA/etc/profile.d/conda.sh"
-conda activate GPTSoVits
-
-cd "$GS_ROOT"
-export PYTHONPATH="$GS_ROOT:$GS_ROOT/GPT_SoVITS:$GS_ROOT/GPT_SoVITS/BigVGAN"
-# conda libstdc++ (pyopenjtalk 需要 GLIBCXX_3.4.29) + torchcodec 需要的 npp 动态库
-export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$CONDA_PREFIX/lib/python3.10/site-packages/nvidia/npp/lib"
-export version=v2Pro
-
-# 启动脚本 (GPT-SoVITS api_v2 的鉴权包装层, 需要 CHII_TTS_API_KEY 环境变量)
-exec python "$REPO_ROOT/tools/server.py" \
-  -c "$CONFIG" \
-  -a 0.0.0.0 \
-  -p "$PORT"
+exec "$VENV/bin/python" "$REPO_ROOT/tools/server.py" "$PORT"
