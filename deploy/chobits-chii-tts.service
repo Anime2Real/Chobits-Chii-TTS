@@ -9,7 +9,7 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/Github/Chobits-Chii-TTS
 EnvironmentFile=/etc/chobits-chii-tts.env
-ExecStart=/home/ubuntu/Github/Chobits-Chii-TTS/.venv/bin/python tools/server.py 9880
+ExecStart=/bin/bash /home/ubuntu/Github/Chobits-Chii-TTS/tools/start_tts_api.sh 9880
 Restart=always
 RestartSec=3
 
