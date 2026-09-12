@@ -200,11 +200,13 @@ async def auth_and_rate_limit(request, call_next):
     return await call_next(request)
 
 
+BIND = _getenv("BIND", "0.0.0.0")  # 生产走 Caddy 反代时绑 127.0.0.1
+
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9880
     uvicorn.run(
         app=APP,
-        host="0.0.0.0",
+        host=BIND,
         port=port,
         workers=1,
         ssl_certfile=SSL_CERTFILE or None,
