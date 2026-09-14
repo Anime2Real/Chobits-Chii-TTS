@@ -78,9 +78,16 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 | `CHII_TTS_API_KEY` | （必填） | API 密钥 |
 | `CHII_TTS_ENGINE_URL` | `http://127.0.0.1:9882` | 引擎地址 |
 | `CHII_TTS_RATE_LIMIT` | `60` | `/tts` 与 `/v1/audio/speech` 每 IP 每分钟限流，0 关闭 |
+| `CHII_TTS_MAX_TEXT_CHARS` | `2000` | 合成文本长度硬上限（两路径均生效），防长文本独占 GPU |
+| `CHII_TTS_MAX_INFLIGHT` | `8` | 全局在途并发上限，超出即 429 |
 | `CHII_TTS_REF_AUDIO` | `/data/models/ref_audio.wav` | OpenAI 垫片 `chii` 音色的参考音频（**引擎容器内**路径） |
+| `CHII_TTS_REF_AUDIO_PREFIX` | `/data/` | `/tts` 透传的 ref_audio 路径前缀约束（防容器内任意路径探测） |
 | `CHII_TTS_REF_TEXT_FILE` | `models/ref_text.txt` | 参考文本（门面**宿主机**路径，读出后内联传给引擎） |
 | `CHII_TTS_SSL_CERTFILE` / `CHII_TTS_SSL_KEYFILE` | （空） | 同时设置时以 HTTPS 启动 |
+
+> 2026-09-14 安全加固：`/tts` 透传不再原样暴露引擎全部参数面——参数白名单 +
+> 数值钳制（batch_size ≤ 16、sample_steps ≤ 64 等）+ ref_audio 前缀约束；
+> 非 JSON 的 POST body 不再接受（此前按原始字节透传）。
 
 ## 4. systemd 守护（生产）
 
