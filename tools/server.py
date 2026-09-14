@@ -24,14 +24,21 @@ OpenAI TTS 兼容垫片 (客户端 baseUrl 填 http(s)://<IP>:9880/v1):
 资源防护（TTS 推理昂贵，不设防时单请求长文本即可独占 GPU 数分钟）:
   - 合成文本长度硬上限 CHII_TTS_MAX_TEXT_CHARS (默认 2000 字符, /tts 与
     /v1/audio/speech 均生效);
-  - 全局在途并发上限 CHII_TTS_MAX_INFLIGHT (默认 8, 超出即 429).
+  - 全局在途并发上限 CHII_TTS_MAX_INFLIGHT (默认 8)：超上限不立即拒绝，
+    排队等待空位，CHII_TTS_QUEUE_TIMEOUT 秒 (默认 30) 内仍拿不到才 429。
+
+引擎批推理：客户端未显式传 batch_size 时注入 CHII_TTS_BATCH_SIZE (默认 5)，
+仅对非流式 (aac/opus) 生效——引擎 parallel_infer 批推理在流式模式下不启用
+(见 GPT_SoVITS/TTS_infer_pack/TTS.py)。
 
 启动: python tools/server.py [端口, 默认 9880]  (绑 0.0.0.0)
 """
 
 from __future__ import annotations  # 宿主机 Python 3.8 (Ubuntu 20.04) 兼容
 
+import asyncio
 import hashlib
+import hmac
 import json
 import os
 import sys
@@ -49,6 +56,18 @@ def _getenv(suffix: str, default: str = "") -> str:
     return os.environ.get(f"CHII_TTS_{suffix}", default)
 
 
+def _getenv_int(suffix: str, default: int) -> int:
+    """整型配置容错：非法值回退默认并告警（直接 traceback 会被 Restart=always 放大成崩溃循环）。"""
+    raw = _getenv(suffix)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"[警告] CHII_TTS_{suffix}={raw!r} 不是合法整数，回退默认值 {default}", file=sys.stderr)
+        return default
+
+
 def _client_ip(host: str, headers) -> str:
     """真实客户端 IP：对端为本机（Caddy/LLM 垫片）时采信 X-Forwarded-For
     最后一跳（反代把真实 IP 追加在尾部，取第一跳会被伪造）；直连不采信 XFF。
@@ -64,11 +83,15 @@ API_KEY = _getenv("API_KEY")
 if not API_KEY:
     sys.exit("[错误] 未设置 CHII_TTS_API_KEY 环境变量, 拒绝以无鉴权方式启动")
 
-RATE_LIMIT = int(_getenv("RATE_LIMIT", "60"))
+RATE_LIMIT = _getenv_int("RATE_LIMIT", 60)
 # 资源防护：文本长度硬上限 + 全局在途并发上限（TTS 推理昂贵，单请求长文本
 # 经切分后可独占 GPU 数分钟，请求数限流管不了单请求成本）
-MAX_TEXT_CHARS = int(_getenv("MAX_TEXT_CHARS", "2000"))
-MAX_INFLIGHT = int(_getenv("MAX_INFLIGHT", "8"))
+MAX_TEXT_CHARS = _getenv_int("MAX_TEXT_CHARS", 2000)
+MAX_INFLIGHT = _getenv_int("MAX_INFLIGHT", 8)
+# 并发排队等待超时（秒）：在途满 MAX_INFLIGHT 后排队，超时仍无空位才 429
+QUEUE_TIMEOUT = float(_getenv("QUEUE_TIMEOUT", "30"))
+# 引擎批推理 batch_size 默认值：客户端未显式传时注入（仅非流式路径生效）
+BATCH_SIZE = int(_getenv("BATCH_SIZE", "5"))
 
 # TLS: 两个变量都设置时以 HTTPS 启动 (自签名证书见 README「部署为 HTTP 服务」)
 SSL_CERTFILE = _getenv("SSL_CERTFILE")
@@ -86,7 +109,16 @@ _client = httpx.AsyncClient(
 )
 
 _hits: dict[str, deque] = defaultdict(deque)
-_inflight = 0  # /tts 与 /v1/audio/speech 的在途请求数（全局并发上限保护 GPU）
+# /tts 与 /v1/audio/speech 的全局在途并发信号量（保护 GPU）。
+# Python 3.8 的 asyncio.Semaphore 创建时即绑定事件循环，模块级创建会绑错 loop，
+# 故在 startup 钩子（运行中的 loop 内）初始化；中间件里保留防御性懒创建兜底
+_inflight_sem: asyncio.Semaphore | None = None
+
+
+@APP.on_event("startup")
+async def _init_inflight_sem():
+    global _inflight_sem
+    _inflight_sem = asyncio.Semaphore(MAX_INFLIGHT)
 
 # --- OpenAI TTS 兼容垫片 -------------------------------------------------
 # voice → 引擎侧参考音频映射. ref_audio_path 是引擎容器内路径 (客户端不可见),
@@ -179,7 +211,7 @@ async def openai_audio_speech(request: Request):
     v = VOICES[voice]
     # 引擎 /tts 全部字段有默认值, 只需传覆盖项 (见上游 TTS_Request);
     # wav 走流式 (streaming_mode=2: 首块 WAV 头 + 后续 raw PCM, 首字延迟低);
-    # aac/opus 逐块编码会拼出损坏帧, 保持非流式一次性返回
+    # aac/opus 逐块编码会拼出损坏帧, 保持非流式一次性返回 (此时批推理生效)
     payload = {
         "text": text,
         "text_lang": TEXT_LANG,
@@ -188,6 +220,7 @@ async def openai_audio_speech(request: Request):
         "prompt_lang": v["prompt_lang"],
         "media_type": FORMAT_MAP[fmt],
         "speed_factor": float(speed),
+        "batch_size": BATCH_SIZE,
         "streaming_mode": 2 if FORMAT_MAP[fmt] == "wav" else False,
     }
     return await _proxy_to_engine("POST", json=payload)
@@ -207,8 +240,8 @@ TTS_ALLOWED_KEYS = {
 TTS_MEDIA_TYPES = {"wav", "aac", "ogg", "mp3", "flac", "pcm"}
 # 数值钳制区间（防 GPU 消耗放大）；不在表内的数值参数原样放行
 TTS_NUMERIC_CLAMPS = {
-    "batch_size": (1, 16),
-    "batch_threshold": (1, 100),
+    "batch_size": (1, 20),
+    "batch_threshold": (0.0, 1.0),  # 引擎侧是 0~1 切分阈值（默认 0.75）
     "sample_steps": (1, 64),
     "top_k": (1, 100),
     "top_p": (0.0, 1.0),
@@ -258,6 +291,8 @@ def _sanitize_tts_params(items):
         payload["ref_audio_path"] = ref_audio_paths[-1]
     if aux_ref_audio_paths:
         payload["aux_ref_audio_paths"] = aux_ref_audio_paths
+    # 客户端未显式传 batch_size 时注入门面默认值（引擎默认 1 不启用批推理）
+    payload.setdefault("batch_size", BATCH_SIZE)
     return payload, None
 
 
@@ -301,29 +336,48 @@ def _extract_key(request) -> str:
     return ""
 
 
+def _key_ok(provided: str) -> bool:
+    """常量时间比较 API key。"""
+    if not provided:
+        return False
+    return hmac.compare_digest(
+        hashlib.sha256(provided.encode()).digest(),
+        hashlib.sha256(API_KEY.encode()).digest())
+
+
 @APP.middleware("http")
 async def auth_and_rate_limit(request, call_next):
-    if _extract_key(request) != API_KEY:
-        return JSONResponse(status_code=401, content={"message": "invalid or missing api key"})
-
     limited_path = request.url.path in ("/tts", "/v1/audio/speech")
+    # 限流前置：鉴权失败也计桶（在线爆破有成本）；空桶即删键防海量 IP 驻留
     if RATE_LIMIT > 0 and limited_path:
         ip = _client_ip(request.client.host if request.client else "unknown", request.headers)
         now = time.time()
         q = _hits[ip]
         while q and now - q[0] > 60:
             q.popleft()
+        if not q:
+            _hits.pop(ip, None)
+            q = _hits[ip]
         if len(q) >= RATE_LIMIT:
             return JSONResponse(status_code=429, content={"message": "rate limit exceeded"})
         q.append(now)
 
-    # 全局在途并发上限：限流管请求数管不了单请求成本（长文本独占 GPU 数分钟），
-    # 超出即拒，防并发大请求打满引擎
-    global _inflight
-    if limited_path and _inflight >= MAX_INFLIGHT:
-        return JSONResponse(status_code=429, content={"message": "server busy, too many in-flight requests"})
+    if not _key_ok(_extract_key(request)):
+        return JSONResponse(status_code=401, content={"message": "invalid or missing api key"})
+
+    # 全局在途并发上限：限流管请求数管不了单请求成本（长文本独占 GPU 数分钟）。
+    # 超上限不立即拒绝，排队等待空位，QUEUE_TIMEOUT 秒内仍拿不到才 429；
+    # try/finally 保证引擎报错、客户端断连等异常路径都释放信号量
+    acquired = False
     if limited_path:
-        _inflight += 1
+        global _inflight_sem
+        if _inflight_sem is None:  # 防御兜底：协程内创建，绑定当前运行中的 loop
+            _inflight_sem = asyncio.Semaphore(MAX_INFLIGHT)
+        try:
+            await asyncio.wait_for(_inflight_sem.acquire(), QUEUE_TIMEOUT)
+            acquired = True
+        except asyncio.TimeoutError:
+            return JSONResponse(status_code=429, content={"message": "server busy, queue wait timeout"})
         # 审计日志（journald）：谁（key 哈希）在何时合成了什么（文本哈希+长度），
         # 不记明文内容；声音克隆滥用可事后追溯
         print(f"[audit] {request.url.path} key={hashlib.sha256(_extract_key(request).encode()).hexdigest()[:12]}"
@@ -332,8 +386,8 @@ async def auth_and_rate_limit(request, call_next):
     try:
         return await call_next(request)
     finally:
-        if limited_path:
-            _inflight -= 1
+        if acquired:
+            _inflight_sem.release()
 
 
 BIND = _getenv("BIND", "127.0.0.1")  # 默认只绑本机（生产由 Caddy 反代）；显式改绑公网须配 TLS
