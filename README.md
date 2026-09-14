@@ -240,8 +240,9 @@ curl -k -X POST https://<服务器IP>:9880/v1/audio/speech \
 # 未启用 TLS 时把 https 换成 http、去掉 -k 即可
 ```
 
-原生 `/tts` 调用示例（GET query / POST JSON 原样透传到引擎；`ref_audio_path` 为**引擎容器内**路径，
-默认数据卷挂载下即 `/data/models/...`；密钥用 `Authorization: Bearer` 或 `?api_key=` 传递）：
+原生 `/tts` 调用示例（GET query / POST JSON 经参数白名单透传到引擎；`ref_audio_path` 为**引擎容器内**路径，
+默认数据卷挂载下即 `/data/models/...`，且必须在 `CHII_TTS_REF_AUDIO_PREFIX` 前缀内；
+密钥只走 `Authorization: Bearer`，`?api_key=` 已弃用——query string 会进访问日志）：
 
 ```bash
 curl -k -G https://<服务器IP>:9880/tts \

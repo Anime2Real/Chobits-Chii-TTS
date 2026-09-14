@@ -31,6 +31,7 @@ OpenAI TTS 兼容垫片 (客户端 baseUrl 填 http(s)://<IP>:9880/v1):
 
 from __future__ import annotations  # 宿主机 Python 3.8 (Ubuntu 20.04) 兼容
 
+import hashlib
 import json
 import os
 import sys
@@ -46,6 +47,17 @@ from fastapi.responses import JSONResponse, StreamingResponse
 def _getenv(suffix: str, default: str = "") -> str:
     """读取 CHII_TTS_<suffix> 环境变量."""
     return os.environ.get(f"CHII_TTS_{suffix}", default)
+
+
+def _client_ip(host: str, headers) -> str:
+    """真实客户端 IP：对端为本机（Caddy/LLM 垫片）时采信 X-Forwarded-For
+    最后一跳（反代把真实 IP 追加在尾部，取第一跳会被伪造）；直连不采信 XFF。
+    垫片透传语音请求时已带上 X-Forwarded-For: <真实客户端 IP>。"""
+    if host == "127.0.0.1":
+        xff = headers.get("x-forwarded-for", "")
+        if xff:
+            return xff.split(",")[-1].strip()
+    return host
 
 
 API_KEY = _getenv("API_KEY")
@@ -108,13 +120,20 @@ def _openai_error(code: int, message: str) -> JSONResponse:
 
 
 async def _proxy_to_engine(method: str, **kwargs) -> StreamingResponse | JSONResponse:
-    """流式转发到引擎 /tts: 状态码与 Content-Type 原样回传, 客户端断开时关闭上游连接."""
+    """流式转发到引擎 /tts: 状态码与 Content-Type 原样回传, 客户端断开时关闭上游连接。
+    上游 5xx 响应体回写为通用错误（引擎异常含容器内路径/栈细节，不外泄）。"""
     try:
         req = _client.build_request(method, "/tts", **kwargs)
         upstream = await _client.send(req, stream=True)
     except httpx.HTTPError as exc:
-        return JSONResponse(status_code=503, content={
-            "message": f"tts engine unavailable ({ENGINE_URL}): {exc.__class__.__name__}"})
+        print(f"[tts] engine unavailable: {exc.__class__.__name__}: {exc}", file=sys.stderr)
+        return JSONResponse(status_code=503, content={"message": "tts engine unavailable"})
+
+    if upstream.status_code >= 500:
+        body = await upstream.aread()
+        print(f"[tts] engine {upstream.status_code}: {body[:200]!r}", file=sys.stderr)
+        await upstream.aclose()
+        return JSONResponse(status_code=502, content={"message": "tts engine error"})
 
     headers = {}
     if ct := upstream.headers.get("content-type"):
@@ -275,10 +294,11 @@ async def tts_passthrough(request: Request):
 
 
 def _extract_key(request) -> str:
+    # 只认 Authorization 头；不再接受 ?api_key=（query string 会进 uvicorn/反代访问日志）
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         return auth[7:].strip()
-    return request.query_params.get("api_key", "")
+    return ""
 
 
 @APP.middleware("http")
@@ -288,7 +308,7 @@ async def auth_and_rate_limit(request, call_next):
 
     limited_path = request.url.path in ("/tts", "/v1/audio/speech")
     if RATE_LIMIT > 0 and limited_path:
-        ip = request.client.host if request.client else "unknown"
+        ip = _client_ip(request.client.host if request.client else "unknown", request.headers)
         now = time.time()
         q = _hits[ip]
         while q and now - q[0] > 60:
@@ -304,6 +324,11 @@ async def auth_and_rate_limit(request, call_next):
         return JSONResponse(status_code=429, content={"message": "server busy, too many in-flight requests"})
     if limited_path:
         _inflight += 1
+        # 审计日志（journald）：谁（key 哈希）在何时合成了什么（文本哈希+长度），
+        # 不记明文内容；声音克隆滥用可事后追溯
+        print(f"[audit] {request.url.path} key={hashlib.sha256(_extract_key(request).encode()).hexdigest()[:12]}"
+              f" ip={_client_ip(request.client.host if request.client else 'unknown', request.headers)}"
+              f" len={request.headers.get('content-length', '?')}", file=sys.stderr)
     try:
         return await call_next(request)
     finally:
@@ -311,7 +336,11 @@ async def auth_and_rate_limit(request, call_next):
             _inflight -= 1
 
 
-BIND = _getenv("BIND", "0.0.0.0")  # 生产走 Caddy 反代时绑 127.0.0.1
+BIND = _getenv("BIND", "127.0.0.1")  # 默认只绑本机（生产由 Caddy 反代）；显式改绑公网须配 TLS
+_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+if BIND not in _LOOPBACK and not SSL_CERTFILE:
+    print(f"[警告] BIND={BIND} 为非回环地址但未配置 TLS，API Key 将明文过网，"
+          "建议改绑 127.0.0.1 由反代终结 TLS", file=sys.stderr)
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9880
