@@ -7,9 +7,9 @@
 # 运行见 docs/deployment.md; 预训练模型与 chii 权重经 /data 卷挂载, 缺失时首次启动自动下载
 FROM condaforge/miniforge3:25.3.1-0
 
-# 锁定到本项目验证过的 commit, 避免 main 分支漂移 (与 README「快速开始」一致)
-ARG GS_REPO_REF=48b1a0169a28582a8984402f82cf438d3bfa6aca
-ARG GS_REPO_URL=https://github.com/RVC-Boss/GPT-SoVITS.git
+# 锁定到本项目 fork 的修复分支 (基于上游 48b1a01, 含非流式合成线程池修复)
+ARG GS_REPO_REF=fix-nonstream-threadpool
+ARG GS_REPO_URL=https://github.com/Anime2Real/GPT-SoVITS.git
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 # 构建期小体积数据 (nltk_data / open_jtalk dict) 的下载源: ms=ModelScope / hf / hf-mirror
@@ -30,8 +30,8 @@ RUN conda create -n GPTSoVits -c conda-forge --override-channels python=3.10 pip
 ENV CONDA_ENV=/opt/conda/envs/GPTSoVits
 ENV PATH="$CONDA_ENV/bin:$PATH"
 
-# GPT-SoVITS 引擎源码 (浅抓取锁定 commit, 减小传输量; GitHub 不通时可
-# --build-arg GS_REPO_URL=https://gh-proxy.com/https://github.com/RVC-Boss/GPT-SoVITS.git)
+# GPT-SoVITS 引擎源码 (浅抓取锁定 ref, 减小传输量; GitHub 不通时可
+# --build-arg GS_REPO_URL=https://gh-proxy.com/https://github.com/Anime2Real/GPT-SoVITS.git)
 RUN git init /opt/GPT-SoVITS \
     && cd /opt/GPT-SoVITS \
     && git remote add origin "$GS_REPO_URL" \

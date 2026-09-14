@@ -23,7 +23,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GS_ROOT="$REPO_ROOT/GPT-SoVITS"
-GS_COMMIT=48b1a0169a28582a8984402f82cf438d3bfa6aca
+GS_REF=fix-nonstream-threadpool
 MINICONDA="${MINICONDA:-$HOME/miniconda3}"
 ENV_NAME=GPTSoVits
 TORCH_INDEX=https://download.pytorch.org/whl/cu128
@@ -60,10 +60,10 @@ conda activate "$ENV_NAME"
 
 # --- 3. GPT-SoVITS ---
 if [ ! -d "$GS_ROOT/.git" ]; then
-    echo "== 克隆 GPT-SoVITS ($GS_COMMIT) =="
+    echo "== 克隆 GPT-SoVITS ($GS_REF) =="
     git init "$GS_ROOT"
-    git -C "$GS_ROOT" remote add origin https://github.com/RVC-Boss/GPT-SoVITS.git
-    git -C "$GS_ROOT" fetch --depth 1 origin "$GS_COMMIT"
+    git -C "$GS_ROOT" remote add origin https://github.com/Anime2Real/GPT-SoVITS.git
+    git -C "$GS_ROOT" fetch --depth 1 origin "$GS_REF"
     git -C "$GS_ROOT" checkout FETCH_HEAD
 fi
 

@@ -123,9 +123,9 @@ git clone https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice
 conda create -n GPTSoVits -c conda-forge --override-channels python=3.10 pip -y
 conda activate GPTSoVits
 
-# 克隆框架 (锁定到本项目验证过的 commit, 避免 main 分支漂移)
-git clone https://github.com/RVC-Boss/GPT-SoVITS.git
-cd GPT-SoVITS && git checkout 48b1a0169a28582a8984402f82cf438d3bfa6aca
+# 克隆框架 (本项目 fork 的修复分支: 基于上游 48b1a01, 含非流式合成线程池修复)
+git clone https://github.com/Anime2Real/GPT-SoVITS.git
+cd GPT-SoVITS && git checkout fix-nonstream-threadpool
 
 # 一键安装 (依赖 + 预训练模型, 模型走 ModelScope 源; 非 TTY 环境需 TERM=xterm)
 TERM=xterm bash install.sh --device CU128 --source ModelScope
