@@ -84,6 +84,19 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 | `CHII_TTS_REF_AUDIO_PREFIX` | `/data/` | `/tts` 透传的 ref_audio 路径前缀约束（防容器内任意路径探测） |
 | `CHII_TTS_REF_TEXT_FILE` | `models/ref_text.txt` | 参考文本（门面**宿主机**路径，读出后内联传给引擎） |
 | `CHII_TTS_SSL_CERTFILE` / `CHII_TTS_SSL_KEYFILE` | （空） | 同时设置时以 HTTPS 启动 |
+| `CHII_TTS_DEEP_PROBE_TTL` | `30` | `/healthz/deep` 探测结果缓存秒数（防高频探测烧 GPU） |
+| `CHII_TTS_DEEP_PROBE_TIMEOUT` | `20` | `/healthz/deep` 单次真实合成探测的超时秒数 |
+
+> 2026-09-15 门面加固（引擎流式模式 bug 的门面侧规避）：`wav` 流式路径下，多句文本
+> 由门面按句切分（日/中标点与换行）后逐句串行调引擎并合并 PCM 流，且流式请求的
+> `batch_size` 一律钉 1——引擎流式模式对多片段并行批推理会抛 "Sizes of tensors must
+> match"（返回 200 但音频截断，反复触发还会拖垮引擎致所有请求 200 空流），而引擎内部
+> 还会把单句按逗号/顿号等再切成片段（门面切句管不到，真实流量已观测到单句触发）；
+> 对单片段文本钉 1 无影响（本就只有 1 个片段进批，推理结果一致）。同时合成开始前
+> 预读上游首块，连接失败/非 200/空流返回 502/503 JSON 而非 200 空流。
+> aac/opus 非流式路径不受影响。
+> 新增 `GET /healthz/deep` 深度健康检查（真实合成探测，带缓存，须 API key）；
+> 轻量存活仍用 `GET /v1/models`。
 
 > 2026-09-14 安全加固：`/tts` 透传不再原样暴露引擎全部参数面——参数白名单 +
 > 数值钳制（batch_size ≤ 16、sample_steps ≤ 64 等）+ ref_audio 前缀约束；
@@ -152,8 +165,13 @@ curl -k -X POST https://<服务器IP>:9880/v1/audio/speech \
 ```
 
 `GET /v1/models` 返回固定模型 `chii-tts`；`voice` 当前仅 `chii`；`response_format` 支持
-`wav`/`aac`/`opus`，默认 `wav`。`wav` 为流式输出（边合成边推流，首字延迟低）；
-`aac`/`opus` 为合成完成后一次性返回。
+`wav`/`aac`/`opus`，默认 `wav`。`wav` 为流式输出（边合成边推流，首字延迟低；多句文本
+由门面按句串行合成，见第 3 节加固说明）；`aac`/`opus` 为合成完成后一次性返回。
+
+```bash
+# 深度健康检查 (真实合成探测, 结果缓存 30s; 异常时 503)
+curl -k -H "Authorization: Bearer <API_KEY>" https://<服务器IP>:9880/healthz/deep
+```
 
 注意在云安全组放行 TCP 9880（9882 只绑回环，无需放行）；对外提供服务须遵守
 CC BY-NC-SA 4.0（非商业）。面向公众分发应用时建议由后端服务代为调用，

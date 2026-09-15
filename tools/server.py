@@ -17,6 +17,24 @@ OpenAI TTS 兼容垫片 (客户端 baseUrl 填 http(s)://<IP>:9880/v1):
     其余采样参数取引擎默认值. wav 为流式输出 (边合成边推流, 首字延迟低);
     aac/opus 为合成完成后一次性返回.
 
+wav 流式路径的门面侧加固 (引擎流式模式多句并行批推理会触发
+"Sizes of tensors must match": 返回 200 但音频截断, 反复触发还会拖垮引擎
+(t2s_model 变 None, 之后所有请求 200 空流)):
+  - 按句串行化: 多句文本按日/中标点与换行切句, 逐句串行调引擎流式接口,
+    多条 PCM 流合并成一条 WAV 流 (首句首块含 WAV 头原样下发, 后续句子剥头);
+    流式请求的 batch_size 一律钉 1 (引擎内部还会把单句再切成片段——内部切分
+    含逗号/顿号等, 门面切句管不到——批推理同样触发该 bug; 对单片段文本无影响,
+    本就只有 1 个片段进批);
+  - 上游即败: 合成开始前预读上游首块, 连接失败/非 200/空流时返回 502/503 JSON,
+    不发 200 空流; 已在流中的失败只能中断连接.
+
+健康检查:
+  - GET /v1/models      → 轻量存活 (进程级, 固定响应);
+  - GET /healthz/deep   → 深度检查: 用极短文本向引擎发一次真实合成
+    (短超时 CHII_TTS_DEEP_PROBE_TIMEOUT, 默认 20s), 能发现"200 空流"变砖;
+    结果缓存 CHII_TTS_DEEP_PROBE_TTL 秒 (默认 30) 避免高频探测烧 GPU;
+    与其余端点一样须带 API key.
+
 原生 /tts (GET/POST) 透传到引擎 (GET query / POST JSON)，但经参数白名单 + 数值钳制
 + ref_audio 路径前缀约束（CHII_TTS_REF_AUDIO_PREFIX，默认 /data/）——不再暴露
 引擎全部参数面。引擎的 /control 与 /set_*_weights 不对外暴露.
@@ -41,6 +59,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import time
 from collections import defaultdict, deque
@@ -145,6 +164,145 @@ FORMAT_MAP = {"wav": "wav", "aac": "aac", "opus": "ogg"}
 # OpenAI TTS 协议不传语言: 钉死 auto (引擎为 v2Pro, 语言列表含 auto)
 TEXT_LANG = "auto"
 
+# --- wav 流式按句串行化 ---------------------------------------------------
+# 引擎流式 (streaming_mode=2) 模式下, 多句文本触发内部并行批推理的
+# "Sizes of tensors must match" 错误: 返回 200 但音频被截断, 反复触发还会拖垮
+# 引擎 (t2s_model 变 None, 之后所有请求 200 空流). 门面侧规避: 按句切分后
+# 逐句串行调引擎, 把多条 PCM 流合并成一条 WAV 流返回.
+_SENTENCE_RE = re.compile(r"[^。！？!?．；;\r\n]+(?:[。！？!?．；;\r\n]+|$)")
+# 句中至少含一个文字/数字才算可合成 (纯标点/引号句引擎切分后为空, 会得到 200 空流)
+_WORD_RE = re.compile(r"\w")
+# 剥后续句子 WAV 头时在前 N 字节内找 data 标记 (找不到回退 44 字节标准头长)
+_WAV_HEADER_SCAN = 128
+
+
+def _split_sentences(text: str) -> list[str]:
+    """按日/中标点与换行切句 (标点保留在句尾), 过滤空白句与无文字句."""
+    return [s for s in (t.strip() for t in _SENTENCE_RE.findall(text))
+            if s and _WORD_RE.search(s)]
+
+
+class _EngineFailure(Exception):
+    """引擎在产出任何音频字节前失败. status 为回给客户端的状态码;
+    异常文本仅进服务端日志 (引擎报错含容器内细节, 不外泄)."""
+
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status = status
+
+
+class _EngineEmptyStream(_EngineFailure):
+    """引擎返回 200 空流: 多为无可合成内容的退化输入 (引擎切分后为空)."""
+
+
+async def _engine_stream_first(payload: dict):
+    """打开引擎流式请求并预读首个数据块; 上游即败 (连接失败/非 200/空流) 抛
+    _EngineFailure, 调用方据此返回错误码而不是 200 空流."""
+    try:
+        req = _client.build_request("POST", "/tts", json=payload)
+        upstream = await _client.send(req, stream=True)
+    except httpx.HTTPError as exc:
+        raise _EngineFailure(503, f"[tts] engine unavailable: {exc.__class__.__name__}: {exc}")
+    if upstream.status_code != 200:
+        body = await upstream.aread()
+        await upstream.aclose()
+        raise _EngineFailure(502, f"[tts] engine {upstream.status_code}: {body[:200]!r}")
+    it = upstream.aiter_raw()
+    try:
+        first = await it.__anext__()
+    except StopAsyncIteration:
+        await upstream.aclose()
+        raise _EngineEmptyStream(502, "[tts] engine returned empty stream")
+    except httpx.HTTPError as exc:
+        await upstream.aclose()
+        raise _EngineFailure(
+            502, f"[tts] engine stream failed before first byte: {exc.__class__.__name__}: {exc}")
+    return upstream, it, first
+
+
+def _strip_wav_header(head: bytes) -> bytes:
+    """剥掉后续句子流首块的 WAV 头: 在前 _WAV_HEADER_SCAN 字节内找 data 标记
+    (头长=偏移+8), 找不到回退 44 字节."""
+    idx = head[:_WAV_HEADER_SCAN].find(b"data")
+    cut = idx + 8 if idx >= 0 else 44
+    return head[cut:] if cut < len(head) else b""
+
+
+async def _merged_wav_stream(first_state, sentences: list[str], payload: dict):
+    """首句流 (含 WAV 头的首块已预读) 原样下发; 后续句子逐句串行合成,
+    剥掉各自 WAV 头后追加 raw PCM. 某句被引擎切成空 (退化句漏网) 时跳过该句;
+    流中 (客户端已收到数据) 的其余上游失败只能让异常向上抛、中断连接."""
+    upstream, it, first = first_state
+    try:
+        yield first
+        async for chunk in it:
+            yield chunk
+    finally:
+        await upstream.aclose()
+    for sentence in sentences[1:]:
+        try:
+            upstream, it, head = await _engine_stream_first(dict(payload, text=sentence))
+        except _EngineEmptyStream:
+            continue  # 该句无可合成内容, 跳过不影响其余句子的音频
+        try:
+            # 首块可能不足一个完整头, 累积到能定位 data 标记或足够判定回退
+            while len(head) < _WAV_HEADER_SCAN and b"data" not in head:
+                try:
+                    head += await it.__anext__()
+                except StopAsyncIteration:
+                    break
+            pcm = _strip_wav_header(head)
+            if pcm:
+                yield pcm
+            async for chunk in it:
+                yield chunk
+        finally:
+            await upstream.aclose()
+
+
+# --- 深度健康检查 -----------------------------------------------------------
+# /v1/models 是进程级轻量存活; /healthz/deep 用极短文本向引擎发一次真实合成,
+# 能发现"返回 200 空流"这类变砖状态. 结果缓存 DEEP_PROBE_TTL 秒,
+# 避免监控高频刷接口烧 GPU. 鉴权语义与其余端点一致 (middleware 全局校验 key).
+DEEP_PROBE_TTL = float(_getenv("DEEP_PROBE_TTL", "30"))
+DEEP_PROBE_TIMEOUT = float(_getenv("DEEP_PROBE_TIMEOUT", "20"))
+_deep_probe: dict = {"at": 0.0, "status": "degraded", "engine": "not probed yet"}
+
+
+async def _probe_engine() -> dict:
+    """向引擎发一次真实合成探测, 返回 {"status", "engine"} (engine 为状态简述)."""
+    v = VOICES["chii"]
+    payload = {
+        "text": "テスト",
+        "text_lang": TEXT_LANG,
+        "ref_audio_path": v["ref_audio_path"],
+        "prompt_text": v["prompt_text"],
+        "prompt_lang": v["prompt_lang"],
+        "media_type": "wav",
+        "streaming_mode": False,
+    }
+    try:
+        resp = await _client.post("/tts", json=payload, timeout=DEEP_PROBE_TIMEOUT)
+    except httpx.HTTPError as exc:
+        return {"status": "degraded", "engine": f"unreachable: {exc.__class__.__name__}"}
+    if resp.status_code != 200:
+        return {"status": "degraded", "engine": f"http_{resp.status_code}"}
+    if not resp.content:
+        return {"status": "degraded", "engine": "empty response"}
+    return {"status": "ok", "engine": "ok"}
+
+
+@APP.get("/healthz/deep")
+async def healthz_deep():
+    if time.time() - _deep_probe["at"] >= DEEP_PROBE_TTL:
+        result = await _probe_engine()
+        _deep_probe.update(result, at=time.time())
+        if result["status"] != "ok":
+            print(f"[healthz] deep probe degraded: {result['engine']}", file=sys.stderr)
+    return JSONResponse(
+        status_code=200 if _deep_probe["status"] == "ok" else 503,
+        content={"status": _deep_probe["status"], "engine": _deep_probe["engine"]})
+
 
 def _openai_error(code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=code, content={
@@ -223,7 +381,28 @@ async def openai_audio_speech(request: Request):
         "batch_size": BATCH_SIZE,
         "streaming_mode": 2 if FORMAT_MAP[fmt] == "wav" else False,
     }
-    return await _proxy_to_engine("POST", json=payload)
+    if FORMAT_MAP[fmt] != "wav":
+        return await _proxy_to_engine("POST", json=payload)
+    # wav 流式: 多句按句串行化合并 (规避引擎多片段并行批推理 bug, 见上方说明);
+    # 切不出多句时整句直发, 请求文本与现状一致
+    sentences = _split_sentences(text)
+    if len(sentences) <= 1:
+        sentences = [text]
+    # 引擎还会按自身规则把单句再切成片段 (内部切分含逗号/顿号等, 门面切句管不到),
+    # batch_size>1 即触发同样的批推理 bug, 故流式请求的 batch_size 一律钉 1;
+    # 对单片段文本无影响 (本就只有 1 个片段进批, 推理结果一致)
+    payload = dict(payload, batch_size=1)
+    try:
+        # 合成开始前预读上游首块: 上游即败返回错误码, 不发 200 空流
+        first_state = await _engine_stream_first(dict(payload, text=sentences[0]))
+    except _EngineFailure as exc:
+        print(str(exc), file=sys.stderr)
+        return JSONResponse(status_code=exc.status, content={"message": "tts engine error"})
+    headers = {}
+    if ct := first_state[0].headers.get("content-type"):
+        headers["content-type"] = ct
+    return StreamingResponse(
+        _merged_wav_stream(first_state, sentences, payload), status_code=200, headers=headers)
 
 
 # --- /tts 透传参数白名单（安全加固：此前引擎全部参数面裸露——

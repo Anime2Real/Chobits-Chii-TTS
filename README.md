@@ -228,8 +228,9 @@ HTTPS（自签名证书）在门面层启用；unit / env 示例与验证步骤�
 
 OpenAI TTS 兼容调用（推荐；客户端 `baseUrl` 填 `http(s)://<服务器IP>:9880/v1`，
 `GET /v1/models` 返回固定模型 `chii-tts`，`voice` 当前仅 `chii`，`response_format` 支持
-`wav`/`aac`/`opus`，默认 `wav`。`wav` 为流式输出（边合成边推流，首字延迟低）；
-`aac`/`opus` 为合成完成后一次性返回）：
+`wav`/`aac`/`opus`，默认 `wav`。`wav` 为流式输出（边合成边推流，首字延迟低；多句文本
+由门面按句串行合成并合并 PCM 流，规避引擎流式模式多片段并行批推理会截断音频的 bug，
+且上游在产出音频前失败时返回 502/503 而非 200 空流）；`aac`/`opus` 为合成完成后一次性返回）：
 
 ```bash
 curl -k -X POST https://<服务器IP>:9880/v1/audio/speech \
@@ -260,7 +261,13 @@ curl -k -G https://<服务器IP>:9880/tts \
 `CHII_TTS_ENGINE_URL`（引擎地址，默认 `http://127.0.0.1:9882`）；
 `CHII_TTS_SSL_CERTFILE` / `CHII_TTS_SSL_KEYFILE`（同时设置时以 HTTPS 启动）；
 `CHII_TTS_REF_AUDIO` / `CHII_TTS_REF_TEXT_FILE`（覆盖 OpenAI 垫片 `chii` 音色的参考音频/参考文本路径，
-前者为容器内路径，后者为宿主机路径）。
+前者为容器内路径，后者为宿主机路径）；
+`CHII_TTS_DEEP_PROBE_TTL` / `CHII_TTS_DEEP_PROBE_TIMEOUT`（深度健康检查结果缓存秒数 / 探测超时秒数，默认 30 / 20）。
+
+健康检查：`GET /v1/models` 为进程级轻量存活；`GET /healthz/deep` 为深度检查——用极短文本向引擎
+发一次真实合成（能发现引擎"返回 200 空流"的变砖状态），引擎健康返回 200 `{"status":"ok",...}`，
+异常返回 503 `{"status":"degraded",...}`；结果按 `CHII_TTS_DEEP_PROBE_TTL` 缓存避免高频探测烧 GPU。
+两者与其他端点一样须带 API key。
 
 注意在云安全组放行 TCP 9880（9882 只绑回环，无需放行）；对外提供服务须遵守 [CC BY-NC-SA 4.0](#许可协议)（非商业）。
 面向公众分发应用时建议由后端服务代为调用，不要把唯一密钥嵌进客户端。
