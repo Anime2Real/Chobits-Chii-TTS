@@ -3,7 +3,7 @@
 架构 (与家族 ASR 服务一致): 推理引擎 (上游 api_v2, 无鉴权) 跑在 Docker 容器里,
 只发布到宿主机 127.0.0.1 (见 docs/deployment.md); 本门面是唯一对外入口:
   - API Key: 环境变量 CHII_TTS_API_KEY (必填, 未设置则拒绝启动).
-    客户端通过 `Authorization: Bearer <key>` 或 `?api_key=<key>` 提供.
+    客户端通过 `Authorization: Bearer <key>` 提供 (query 传 key 会进访问日志, 不支持).
   - 限流: /tts 与 /v1/audio/speech 每 IP 每分钟最多 CHII_TTS_RATE_LIMIT 次 (默认 60, 设 0 关闭).
   - TLS: 同时设置 CHII_TTS_SSL_CERTFILE / CHII_TTS_SSL_KEYFILE 时以 HTTPS 启动.
   - 引擎地址: CHII_TTS_ENGINE_URL (默认 http://127.0.0.1:9882).
@@ -37,13 +37,17 @@ wav 流式路径的门面侧加固 (引擎流式模式多句并行批推理会�
 
 原生 /tts (GET/POST) 透传到引擎 (GET query / POST JSON)，但经参数白名单 + 数值钳制
 + ref_audio 路径前缀约束（CHII_TTS_REF_AUDIO_PREFIX，默认 /data/）——不再暴露
-引擎全部参数面。引擎的 /control 与 /set_*_weights 不对外暴露.
+引擎全部参数面。流式透传 (streaming_mode 为真) 的 batch_size 一律钉 1
+（与 OpenAI 垫片 wav 流式同款规避，见上方说明）。引擎的 /control 与 /set_*_weights 不对外暴露.
 
 资源防护（TTS 推理昂贵，不设防时单请求长文本即可独占 GPU 数分钟）:
   - 合成文本长度硬上限 CHII_TTS_MAX_TEXT_CHARS (默认 2000 字符, /tts 与
     /v1/audio/speech 均生效);
   - 全局在途并发上限 CHII_TTS_MAX_INFLIGHT (默认 8)：超上限不立即拒绝，
     排队等待空位，CHII_TTS_QUEUE_TIMEOUT 秒 (默认 30) 内仍拿不到才 429。
+    持有期覆盖真实 GPU 占用：并发控制在端点层执行，流式响应 (wav 流式与
+    /tts 透传) 的信号量持有到推流结束/客户端断开（放中间件层时 call_next
+    拿到响应头即返回，数分钟的流式合成会落在信号量外）。
 
 引擎批推理：客户端未显式传 batch_size 时注入 CHII_TTS_BATCH_SIZE (默认 5)，
 仅对非流式 (aac/opus) 生效——引擎 parallel_infer 批推理在流式模式下不启用
@@ -87,6 +91,18 @@ def _getenv_int(suffix: str, default: int) -> int:
         return default
 
 
+def _getenv_float(suffix: str, default: float) -> float:
+    """浮点配置容错：同 _getenv_int 的理由。"""
+    raw = _getenv(suffix)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"[警告] CHII_TTS_{suffix}={raw!r} 不是合法数值，回退默认值 {default}", file=sys.stderr)
+        return default
+
+
 def _client_ip(host: str, headers) -> str:
     """真实客户端 IP：对端为本机（Caddy/LLM 垫片）时采信 X-Forwarded-For
     最后一跳（反代把真实 IP 追加在尾部，取第一跳会被伪造）；直连不采信 XFF。
@@ -108,9 +124,9 @@ RATE_LIMIT = _getenv_int("RATE_LIMIT", 60)
 MAX_TEXT_CHARS = _getenv_int("MAX_TEXT_CHARS", 2000)
 MAX_INFLIGHT = _getenv_int("MAX_INFLIGHT", 8)
 # 并发排队等待超时（秒）：在途满 MAX_INFLIGHT 后排队，超时仍无空位才 429
-QUEUE_TIMEOUT = float(_getenv("QUEUE_TIMEOUT", "30"))
+QUEUE_TIMEOUT = _getenv_float("QUEUE_TIMEOUT", 30.0)
 # 引擎批推理 batch_size 默认值：客户端未显式传时注入（仅非流式路径生效）
-BATCH_SIZE = int(_getenv("BATCH_SIZE", "5"))
+BATCH_SIZE = _getenv_int("BATCH_SIZE", 5)
 
 # TLS: 两个变量都设置时以 HTTPS 启动 (自签名证书见 README「部署为 HTTP 服务」)
 SSL_CERTFILE = _getenv("SSL_CERTFILE")
@@ -128,9 +144,12 @@ _client = httpx.AsyncClient(
 )
 
 _hits: dict[str, deque] = defaultdict(deque)
-# /tts 与 /v1/audio/speech 的全局在途并发信号量（保护 GPU）。
+# /tts 与 /v1/audio/speech 的全局在途并发信号量（保护 GPU）。限流管请求数管不了
+# 单请求成本（长文本独占 GPU 数分钟）；并发控制在端点层执行而非中间件——
+# BaseHTTPMiddleware 的 call_next 拿到响应头即返回，流式合成数分钟的 GPU 占用
+# 会落在信号量外，上限名存实亡。
 # Python 3.8 的 asyncio.Semaphore 创建时即绑定事件循环，模块级创建会绑错 loop，
-# 故在 startup 钩子（运行中的 loop 内）初始化；中间件里保留防御性懒创建兜底
+# 故在 startup 钩子（运行中的 loop 内）初始化；端点里保留防御性懒创建兜底
 _inflight_sem: asyncio.Semaphore | None = None
 
 
@@ -138,6 +157,51 @@ _inflight_sem: asyncio.Semaphore | None = None
 async def _init_inflight_sem():
     global _inflight_sem
     _inflight_sem = asyncio.Semaphore(MAX_INFLIGHT)
+
+
+class _InflightHold:
+    """在途信号量持有句柄：幂等释放，允许把持有期从端点函数延长到流式响应体写完。"""
+
+    def __init__(self, sem: asyncio.Semaphore):
+        self._sem: asyncio.Semaphore | None = sem
+
+    def release(self) -> None:
+        sem, self._sem = self._sem, None
+        if sem is not None:
+            sem.release()
+
+
+async def _acquire_inflight() -> tuple[_InflightHold | None, JSONResponse | None]:
+    """获取全局在途信号量：超上限排队等待空位，QUEUE_TIMEOUT 秒内仍拿不到返回 429 响应。
+    成功时返回 (hold, None)，调用方须在响应生命周期结束时 hold.release()。"""
+    global _inflight_sem
+    if _inflight_sem is None:  # 防御兜底：协程内创建，绑定当前运行中的 loop
+        _inflight_sem = asyncio.Semaphore(MAX_INFLIGHT)
+    try:
+        await asyncio.wait_for(_inflight_sem.acquire(), QUEUE_TIMEOUT)
+    except asyncio.TimeoutError:
+        return None, JSONResponse(status_code=429, content={"message": "server busy, queue wait timeout"})
+    return _InflightHold(_inflight_sem), None
+
+
+def _hold_through_response(response, hold: _InflightHold):
+    """按响应类型决定信号量释放时机：非流式响应在端点返回前合成已完成，立即释放；
+    流式响应（wav 流式 / /tts 透传）的合成贯穿整个 body 迭代，包裹迭代器把释放
+    推迟到迭代结束/异常/客户端断开。"""
+    if not isinstance(response, StreamingResponse):
+        hold.release()
+        return response
+    iterator = response.body_iterator
+
+    async def _guarded():
+        try:
+            async for chunk in iterator:
+                yield chunk
+        finally:
+            hold.release()
+
+    response.body_iterator = _guarded()
+    return response
 
 # --- OpenAI TTS 兼容垫片 -------------------------------------------------
 # voice → 引擎侧参考音频映射. ref_audio_path 是引擎容器内路径 (客户端不可见),
@@ -264,8 +328,8 @@ async def _merged_wav_stream(first_state, sentences: list[str], payload: dict):
 # /v1/models 是进程级轻量存活; /healthz/deep 用极短文本向引擎发一次真实合成,
 # 能发现"返回 200 空流"这类变砖状态. 结果缓存 DEEP_PROBE_TTL 秒,
 # 避免监控高频刷接口烧 GPU. 鉴权语义与其余端点一致 (middleware 全局校验 key).
-DEEP_PROBE_TTL = float(_getenv("DEEP_PROBE_TTL", "30"))
-DEEP_PROBE_TIMEOUT = float(_getenv("DEEP_PROBE_TIMEOUT", "20"))
+DEEP_PROBE_TTL = _getenv_float("DEEP_PROBE_TTL", 30.0)
+DEEP_PROBE_TIMEOUT = _getenv_float("DEEP_PROBE_TIMEOUT", 20.0)
 _deep_probe: dict = {"at": 0.0, "status": "degraded", "engine": "not probed yet"}
 
 
@@ -381,28 +445,41 @@ async def openai_audio_speech(request: Request):
         "batch_size": BATCH_SIZE,
         "streaming_mode": 2 if FORMAT_MAP[fmt] == "wav" else False,
     }
-    if FORMAT_MAP[fmt] != "wav":
-        return await _proxy_to_engine("POST", json=payload)
-    # wav 流式: 多句按句串行化合并 (规避引擎多片段并行批推理 bug, 见上方说明);
-    # 切不出多句时整句直发, 请求文本与现状一致
-    sentences = _split_sentences(text)
-    if len(sentences) <= 1:
-        sentences = [text]
-    # 引擎还会按自身规则把单句再切成片段 (内部切分含逗号/顿号等, 门面切句管不到),
-    # batch_size>1 即触发同样的批推理 bug, 故流式请求的 batch_size 一律钉 1;
-    # 对单片段文本无影响 (本就只有 1 个片段进批, 推理结果一致)
-    payload = dict(payload, batch_size=1)
+    # 全局在途并发上限：超上限排队等待空位，QUEUE_TIMEOUT 秒内仍拿不到才 429；
+    # 持有期覆盖真实 GPU 占用（流式响应持有到推流结束，见 _hold_through_response）。
+    # 注意不能用 try/finally 释放：端点 return 响应对象时流式 body 尚未开始迭代，
+    # finally 会在推流前就把信号量放掉；异常路径在 except 里释放，正常路径由
+    # _hold_through_response 按响应类型决定释放时机
+    hold, busy = await _acquire_inflight()
+    if busy is not None:
+        return busy
     try:
-        # 合成开始前预读上游首块: 上游即败返回错误码, 不发 200 空流
-        first_state = await _engine_stream_first(dict(payload, text=sentences[0]))
-    except _EngineFailure as exc:
-        print(str(exc), file=sys.stderr)
-        return JSONResponse(status_code=exc.status, content={"message": "tts engine error"})
-    headers = {}
-    if ct := first_state[0].headers.get("content-type"):
-        headers["content-type"] = ct
-    return StreamingResponse(
-        _merged_wav_stream(first_state, sentences, payload), status_code=200, headers=headers)
+        if FORMAT_MAP[fmt] != "wav":
+            return _hold_through_response(await _proxy_to_engine("POST", json=payload), hold)
+        # wav 流式: 多句按句串行化合并 (规避引擎多片段并行批推理 bug, 见上方说明);
+        # 切不出多句时整句直发, 请求文本与现状一致
+        sentences = _split_sentences(text)
+        if len(sentences) <= 1:
+            sentences = [text]
+        # 引擎还会按自身规则把单句再切成片段 (内部切分含逗号/顿号等, 门面切句管不到),
+        # batch_size>1 即触发同样的批推理 bug, 故流式请求的 batch_size 一律钉 1;
+        # 对单片段文本无影响 (本就只有 1 个片段进批, 推理结果一致)
+        payload = dict(payload, batch_size=1)
+        try:
+            # 合成开始前预读上游首块: 上游即败返回错误码, 不发 200 空流
+            first_state = await _engine_stream_first(dict(payload, text=sentences[0]))
+        except _EngineFailure as exc:
+            print(str(exc), file=sys.stderr)
+            return _hold_through_response(
+                JSONResponse(status_code=exc.status, content={"message": "tts engine error"}), hold)
+        headers = {}
+        if ct := first_state[0].headers.get("content-type"):
+            headers["content-type"] = ct
+        return _hold_through_response(StreamingResponse(
+            _merged_wav_stream(first_state, sentences, payload), status_code=200, headers=headers), hold)
+    except Exception:
+        hold.release()
+        raise
 
 
 # --- /tts 透传参数白名单（安全加固：此前引擎全部参数面裸露——
@@ -429,6 +506,16 @@ TTS_NUMERIC_CLAMPS = {
     "speed_factor": (0.25, 4.0),
     "fragment_interval": (0.01, 1.0),
 }
+# 整型参数：钳制统一走 float()，钳完须还原 int——GET 展开成 query 后
+# 引擎 pydantic 对 "5.0" 这类浮点字符串解析 int 会 422
+TTS_INT_PARAMS = {"batch_size", "sample_steps", "top_k"}
+
+
+def _is_streaming(value) -> bool:
+    """streaming_mode 透传值判真：GET 走 query 全是字符串，"false"/"0" 也是非空串。"""
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "0", "false", "none", "off")
+    return bool(value)
 
 
 def _sanitize_tts_params(items):
@@ -453,6 +540,8 @@ def _sanitize_tts_params(items):
                 value = min(max(float(value), lo), hi)
             except (TypeError, ValueError):
                 continue  # 非法数值直接丢弃，用引擎默认值
+            if key in TTS_INT_PARAMS:
+                value = int(value)  # 还原整型，否则 GET 透传 "5.0" 被引擎拒成 422
         payload[key] = value
     for path in ref_audio_paths + aux_ref_audio_paths:
         if not str(path).startswith(REF_AUDIO_PREFIX):
@@ -472,37 +561,61 @@ def _sanitize_tts_params(items):
         payload["aux_ref_audio_paths"] = aux_ref_audio_paths
     # 客户端未显式传 batch_size 时注入门面默认值（引擎默认 1 不启用批推理）
     payload.setdefault("batch_size", BATCH_SIZE)
+    # 引擎流式模式（streaming_mode=2 等）对多片段并行批推理有 bug：batch_size>1 即
+    # "Sizes of tensors must match"——返回 200 但音频截断，反复触发还会拖垮引擎
+    # （之后所有请求 200 空流，见模块 docstring）；引擎内部还会把单句再切成片段，
+    # 客户端侧切句管不到。故流式请求的 batch_size 一律钉 1（覆盖显式传值并记日志），
+    # 与 OpenAI 垫片 wav 流式路径同款规避；对单片段文本无影响
+    if _is_streaming(payload.get("streaming_mode")) and payload["batch_size"] != 1:
+        print(f"[tts] streaming_mode 开启，batch_size 由 {payload['batch_size']!r} 强制钉为 1",
+              file=sys.stderr)
+        payload["batch_size"] = 1
     return payload, None
 
 
 @APP.api_route("/tts", methods=["GET", "POST"])
 async def tts_passthrough(request: Request):
-    if request.method == "GET":
-        # 剥掉 api_key 再清洗转发 (multi_items 保留 aux_ref_audio_paths 等重复参数)
-        items = [(k, v) for k, v in request.query_params.multi_items() if k != "api_key"]
+    # 全局在途并发上限（排队 QUEUE_TIMEOUT 秒，超时 429；流式响应持有到推流结束）。
+    # 不能用 try/finally 释放（端点 return 时流式 body 尚未迭代，finally 会提前放锁），
+    # 异常路径在 except 里释放，正常路径由 _hold_through_response 决定释放时机
+    hold, busy = await _acquire_inflight()
+    if busy is not None:
+        return busy
+    try:
+        if request.method == "GET":
+            # 剔出 api_key 再清洗转发：鉴权只认 Bearer 头，这里仅防止该参数透传给引擎
+            # (multi_items 保留 aux_ref_audio_paths 等重复参数)
+            items = [(k, v) for k, v in request.query_params.multi_items() if k != "api_key"]
+            payload, error = _sanitize_tts_params(items)
+            if error:
+                return _hold_through_response(
+                    JSONResponse(status_code=400, content={"message": error}), hold)
+            # GET 透传展开为 query 参数（aux_ref_audio_paths 还原为重复键）
+            params = [(k, v) for k, v in payload.items() if k != "aux_ref_audio_paths"]
+            params += [("aux_ref_audio_paths", v) for v in payload.get("aux_ref_audio_paths", [])]
+            return _hold_through_response(await _proxy_to_engine("GET", params=params), hold)
+        try:
+            body = await request.json()
+        except (ValueError, json.JSONDecodeError):
+            return _hold_through_response(
+                JSONResponse(status_code=400, content={"message": "请求体不是合法 JSON"}), hold)
+        if not isinstance(body, dict):
+            return _hold_through_response(
+                JSONResponse(status_code=400, content={"message": "请求体须为 JSON 对象"}), hold)
+        items = []
+        for key, value in body.items():
+            if key == "aux_ref_audio_paths" and isinstance(value, list):
+                items += [(key, item) for item in value]
+            else:
+                items.append((key, value))
         payload, error = _sanitize_tts_params(items)
         if error:
-            return JSONResponse(status_code=400, content={"message": error})
-        # GET 透传展开为 query 参数（aux_ref_audio_paths 还原为重复键）
-        params = [(k, v) for k, v in payload.items() if k != "aux_ref_audio_paths"]
-        params += [("aux_ref_audio_paths", v) for v in payload.get("aux_ref_audio_paths", [])]
-        return await _proxy_to_engine("GET", params=params)
-    try:
-        body = await request.json()
-    except (ValueError, json.JSONDecodeError):
-        return JSONResponse(status_code=400, content={"message": "请求体不是合法 JSON"})
-    if not isinstance(body, dict):
-        return JSONResponse(status_code=400, content={"message": "请求体须为 JSON 对象"})
-    items = []
-    for key, value in body.items():
-        if key == "aux_ref_audio_paths" and isinstance(value, list):
-            items += [(key, item) for item in value]
-        else:
-            items.append((key, value))
-    payload, error = _sanitize_tts_params(items)
-    if error:
-        return JSONResponse(status_code=400, content={"message": error})
-    return await _proxy_to_engine("POST", json=payload)
+            return _hold_through_response(
+                JSONResponse(status_code=400, content={"message": error}), hold)
+        return _hold_through_response(await _proxy_to_engine("POST", json=payload), hold)
+    except Exception:
+        hold.release()
+        raise
 
 # ------------------------------------------------------------------------
 
@@ -527,10 +640,11 @@ def _key_ok(provided: str) -> bool:
 @APP.middleware("http")
 async def auth_and_rate_limit(request, call_next):
     limited_path = request.url.path in ("/tts", "/v1/audio/speech")
-    # 限流前置：鉴权失败也计桶（在线爆破有成本）；空桶即删键防海量 IP 驻留
+    # 限流前置：鉴权失败也计桶（在线爆破有成本）；空桶即删键防海量 IP 驻留；
+    # 单调时钟（系统时钟回拨不会把窗口拉长）
     if RATE_LIMIT > 0 and limited_path:
         ip = _client_ip(request.client.host if request.client else "unknown", request.headers)
-        now = time.time()
+        now = time.monotonic()
         q = _hits[ip]
         while q and now - q[0] > 60:
             q.popleft()
@@ -544,29 +658,15 @@ async def auth_and_rate_limit(request, call_next):
     if not _key_ok(_extract_key(request)):
         return JSONResponse(status_code=401, content={"message": "invalid or missing api key"})
 
-    # 全局在途并发上限：限流管请求数管不了单请求成本（长文本独占 GPU 数分钟）。
-    # 超上限不立即拒绝，排队等待空位，QUEUE_TIMEOUT 秒内仍拿不到才 429；
-    # try/finally 保证引擎报错、客户端断连等异常路径都释放信号量
-    acquired = False
     if limited_path:
-        global _inflight_sem
-        if _inflight_sem is None:  # 防御兜底：协程内创建，绑定当前运行中的 loop
-            _inflight_sem = asyncio.Semaphore(MAX_INFLIGHT)
-        try:
-            await asyncio.wait_for(_inflight_sem.acquire(), QUEUE_TIMEOUT)
-            acquired = True
-        except asyncio.TimeoutError:
-            return JSONResponse(status_code=429, content={"message": "server busy, queue wait timeout"})
-        # 审计日志（journald）：谁（key 哈希）在何时合成了什么（文本哈希+长度），
-        # 不记明文内容；声音克隆滥用可事后追溯
+        # 审计日志（journald 自带时间戳）：key 哈希 + 客户端 IP + 请求体长度，
+        # 不记明文内容；声音克隆滥用可事后追溯。
+        # 在途并发上限不在此层执行（call_next 拿到响应头即返回，流式合成会落在
+        # 信号量外），已下沉到端点层，见 _acquire_inflight / _hold_through_response
         print(f"[audit] {request.url.path} key={hashlib.sha256(_extract_key(request).encode()).hexdigest()[:12]}"
               f" ip={_client_ip(request.client.host if request.client else 'unknown', request.headers)}"
               f" len={request.headers.get('content-length', '?')}", file=sys.stderr)
-    try:
-        return await call_next(request)
-    finally:
-        if acquired:
-            _inflight_sem.release()
+    return await call_next(request)
 
 
 BIND = _getenv("BIND", "127.0.0.1")  # 默认只绑本机（生产由 Caddy 反代）；显式改绑公网须配 TLS

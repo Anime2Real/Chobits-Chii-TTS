@@ -79,7 +79,10 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 | `CHII_TTS_ENGINE_URL` | `http://127.0.0.1:9882` | 引擎地址 |
 | `CHII_TTS_RATE_LIMIT` | `60` | `/tts` 与 `/v1/audio/speech` 每 IP 每分钟限流，0 关闭 |
 | `CHII_TTS_MAX_TEXT_CHARS` | `2000` | 合成文本长度硬上限（两路径均生效），防长文本独占 GPU |
-| `CHII_TTS_MAX_INFLIGHT` | `8` | 全局在途并发上限，超出即 429 |
+| `CHII_TTS_MAX_INFLIGHT` | `8` | 全局在途并发上限（保护 GPU）：超上限排队等待空位，`CHII_TTS_QUEUE_TIMEOUT` 秒内仍拿不到才 429；流式请求（wav 流式与 `/tts` 透传）的信号量持有到推流结束/客户端断开 |
+| `CHII_TTS_QUEUE_TIMEOUT` | `30` | 在途满员后排队等待空位的超时秒数，超时返回 429 |
+| `CHII_TTS_BATCH_SIZE` | `5` | 引擎批推理 batch_size 默认值（客户端未显式传时注入，仅非流式路径生效；流式一律钉 1） |
+| `CHII_TTS_BIND` | `127.0.0.1` | 门面监听地址（生产由 Caddy 反代；绑非回环地址须配 TLS，否则启动时告警） |
 | `CHII_TTS_REF_AUDIO` | `/data/models/ref_audio.wav` | OpenAI 垫片 `chii` 音色的参考音频（**引擎容器内**路径） |
 | `CHII_TTS_REF_AUDIO_PREFIX` | `/data/` | `/tts` 透传的 ref_audio 路径前缀约束（防容器内任意路径探测） |
 | `CHII_TTS_REF_TEXT_FILE` | `models/ref_text.txt` | 参考文本（门面**宿主机**路径，读出后内联传给引擎） |
@@ -99,8 +102,12 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 > 轻量存活仍用 `GET /v1/models`。
 
 > 2026-09-14 安全加固：`/tts` 透传不再原样暴露引擎全部参数面——参数白名单 +
-> 数值钳制（batch_size ≤ 16、sample_steps ≤ 64 等）+ ref_audio 前缀约束；
+> 数值钳制（batch_size ≤ 20、sample_steps ≤ 64 等）+ ref_audio 前缀约束；
 > 非 JSON 的 POST body 不再接受（此前按原始字节透传）。
+> 2026-09-16 补充：流式透传（`streaming_mode` 为真）的 `batch_size` 一律钉 1
+> （覆盖显式传值并记日志），否则 `GET /tts?streaming_mode=2` 即可触发上述引擎
+> 批推理 bug 致全服务 200 空流；整型钳制参数（batch_size/top_k/sample_steps）
+> 钳制后还原 int（此前 GET 透传 "5.0" 被引擎拒成 422）。
 
 ## 4. systemd 守护（生产）
 
