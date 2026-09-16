@@ -9,6 +9,7 @@
   - 引擎地址: CHII_TTS_ENGINE_URL (默认 http://127.0.0.1:9882).
 
 OpenAI TTS 兼容垫片 (客户端 baseUrl 填 http(s)://<IP>:9880/v1):
+  - GET  /healthz          → 200 (免鉴权浅探活，与 ASR 门面对齐；深探测 /healthz/deep 仍需 key)
   - GET  /v1/models        → 固定返回 chii-tts
   - POST /v1/audio/speech  → OpenAI TTS 协议: {"model", "input", "voice", "response_format"?, "speed"?}
     voice 映射引擎侧参考音频 (当前仅 "chii");
@@ -356,6 +357,12 @@ async def _probe_engine() -> dict:
     return {"status": "ok", "engine": "ok"}
 
 
+@APP.get("/healthz")
+async def healthz():
+    # 免鉴权浅探活（中间件对 /healthz 放行）；不回引擎字段，免鉴权端点不暴露指纹
+    return {"status": "ok", "model": TTS_MODEL}
+
+
 @APP.get("/healthz/deep")
 async def healthz_deep():
     if time.time() - _deep_probe["at"] >= DEEP_PROBE_TTL:
@@ -639,6 +646,10 @@ def _key_ok(provided: str) -> bool:
 
 @APP.middleware("http")
 async def auth_and_rate_limit(request, call_next):
+    # 免鉴权浅探活：/healthz 直接放行（/healthz/deep 仍需 key——真实合成探测有 GPU 成本）
+    if request.url.path == "/healthz":
+        return await call_next(request)
+
     limited_path = request.url.path in ("/tts", "/v1/audio/speech")
     # 限流前置：鉴权失败也计桶（在线爆破有成本）；空桶即删键防海量 IP 驻留；
     # 单调时钟（系统时钟回拨不会把窗口拉长）

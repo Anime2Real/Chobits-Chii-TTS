@@ -94,8 +94,18 @@ def test_models_requires_key(client):
     assert client.get("/v1/models", headers=AUTH).status_code == 200
 
 
+def test_healthz_is_open(client, fake_engine):
+    # /healthz 免鉴权浅探活（与 ASR 门面对齐）：无 key / 错 key 都 200，不暴露引擎指纹
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "model": "chii-tts"}
+    assert client.get("/healthz", headers={"Authorization": "Bearer wrong"}).status_code == 200
+    # 不触引擎（浅探活无 GPU 成本）
+    assert not fake_engine.requests
+
+
 def test_healthz_deep_requires_key(client, fake_engine):
-    # 门面没有免鉴权健康端点：/healthz/deep 与其余端点一样须带 key
+    # 深探测是真实合成（有 GPU 成本），与其余端点一样须带 key
     assert client.get("/healthz/deep").status_code == 401
     assert client.get("/healthz/deep", headers=AUTH).status_code in (200, 503)
 
