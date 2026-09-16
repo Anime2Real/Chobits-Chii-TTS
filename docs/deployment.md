@@ -20,7 +20,8 @@ docker build -t chobits-chii-tts-engine \
   docker/
 ```
 
-引擎源码经 `GS_REPO_REF` 锁到 README 验证过的 commit（默认即锁定值，无需改动）；
+引擎源码经 `GS_REPO_REF` 锁到 README 验证过的 commit（默认 `49587af3`，
+即 fix-nonstream-threadpool 分支 2026-09-16 的 HEAD，构建时可用 `--build-arg` 覆盖）；
 `MODEL_SOURCE`（ms/hf/hf-mirror）控制构建期 nltk_data 与 open_jtalk 词典的下载源，默认 ModelScope。
 
 ## 2. 启动引擎容器
@@ -111,25 +112,16 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 
 ## 4. systemd 守护（生产）
 
-```ini
-# /etc/systemd/system/chobits-chii-tts.service
-[Unit]
-Description=Chobits Chii TTS (facade -> docker engine)
-After=network-online.target docker.service
-Wants=network-online.target
+unit 以仓库 [deploy/chobits-chii-tts.service](../deploy/chobits-chii-tts.service) 为唯一事实源——
+本文不再内嵌全文（避免双份漂移，改动只改 deploy/ 那一处）：
 
-[Service]
-Type=simple
-User=ubuntu
-ExecStart=/bin/bash /home/ubuntu/Github/Chobits-Chii-TTS/tools/start_tts_api.sh 9880
-Restart=on-failure
-RestartSec=5
-LimitNOFILE=65536
-EnvironmentFile=/etc/chobits-chii-tts.env
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo cp deploy/chobits-chii-tts.service /etc/systemd/system/chobits-chii-tts.service
 ```
+
+unit 要点：`Restart=always` + `RestartSec=3`（崩溃/启动失败快速拉起）、
+`NoNewPrivileges=true` / `PrivateTmp=true` 加固、`EnvironmentFile` 注入密钥、
+`LimitNOFILE=65536`、`After=docker.service` 保证引擎容器先就绪。
 
 ```bash
 # /etc/chobits-chii-tts.env (chmod 600), 内容:

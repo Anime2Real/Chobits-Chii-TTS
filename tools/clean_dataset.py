@@ -20,6 +20,7 @@ import csv
 import re
 import shutil
 import wave
+from collections.abc import Callable
 from pathlib import Path
 
 DEFAULT_SRC = Path.home() / "Github/Chobits-Chii-Voice/dataset"
@@ -65,6 +66,48 @@ def parse_name(name: str) -> tuple[str, float]:
     return m.group(1), float(m.group(2))
 
 
+def cps_exceeded(text: str, dur: float) -> bool:
+    """字/秒 > 15 视为物理上不可能; 时长未知 (<= 0) 时不判定."""
+    return dur > 0 and len(text) / dur > 15
+
+
+def index_transcripts(rows: list[dict]) -> dict[str, list[dict]]:
+    """transcripts.csv 行按集数分组, 供对照文本查找."""
+    by_ep: dict[str, list[dict]] = {}
+    for r in rows:
+        by_ep.setdefault(r["ep"], []).append(r)
+    return by_ep
+
+
+def lookup_transcript(by_ep: dict[str, list[dict]], ep: str, start: float) -> str | None:
+    """取 (集数, 起始秒) 时间差 < 0.5s 的最近对照文本, 无则 None."""
+    cand = sorted(by_ep.get(ep, []), key=lambda r: abs(float(r["start"]) - start))
+    if cand and abs(float(cand[0]["start"]) - start) < 0.5:
+        return cand[0]["text"]
+    return None
+
+
+def decide(
+    raw_text: str, dur: float, lookup: Callable[[], str | None]
+) -> tuple[str, str, str]:
+    """单条 metadata 的清洗判定, 返回 (action, reason, final).
+
+    action: keep / repaired / dropped; reason 对 keep 为 "" (其余为
+    repeat / latin / short / cps); final 为写出文本 (dropped 为 "").
+    """
+    text = normalize(raw_text)
+    reason = text_dirty(text)
+    if reason is None and cps_exceeded(text, dur):
+        reason = "cps"
+
+    if reason is None:
+        return "keep", "", text
+    candidate = lookup()
+    if candidate is not None and text_clean(normalize(candidate)):
+        return "repaired", reason, normalize(candidate)
+    return "dropped", reason, ""
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", type=Path, default=DEFAULT_SRC, help="Chobits-Chii-Voice dataset 目录")
@@ -79,15 +122,7 @@ def main() -> None:
             meta.append((name, text))
 
     transcripts = list(csv.DictReader(open(src / "transcripts.csv", encoding="utf-8")))
-    by_ep: dict[str, list[dict]] = {}
-    for r in transcripts:
-        by_ep.setdefault(r["ep"], []).append(r)
-
-    def lookup(ep: str, start: float) -> str | None:
-        cand = sorted(by_ep.get(ep, []), key=lambda r: abs(float(r["start"]) - start))
-        if cand and abs(float(cand[0]["start"]) - start) < 0.5:
-            return cand[0]["text"]
-        return None
+    by_ep = index_transcripts(transcripts)
 
     (dst / "wavs").mkdir(parents=True, exist_ok=True)
     report, kept = [], []
@@ -98,22 +133,10 @@ def main() -> None:
         with wave.open(str(src / "wavs" / f"{name}.wav")) as w:
             dur = w.getnframes() / w.getframerate()
 
-        text = normalize(raw_text)
-        reason = text_dirty(text)
-        if reason is None and dur > 0 and len(text) / dur > 15:
-            reason = "cps"
-
-        if reason is None:
-            action, final = "keep", text
-        else:
-            candidate = lookup(ep, start)
-            if candidate is not None and text_clean(normalize(candidate)):
-                action, final = "repaired", normalize(candidate)
-            else:
-                action, final = "dropped", ""
+        action, reason, final = decide(raw_text, dur, lambda: lookup_transcript(by_ep, ep, start))
 
         report.append({
-            "file": name, "dur": f"{dur:.2f}", "action": action, "reason": reason or "",
+            "file": name, "dur": f"{dur:.2f}", "action": action, "reason": reason,
             "original": raw_text, "final": final,
         })
         if action != "dropped":

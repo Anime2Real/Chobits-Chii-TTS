@@ -5,7 +5,8 @@
 # 步骤:
 #   1. 安装 Miniconda (~/miniconda3, 清华镜像)
 #   2. 创建 conda 环境 GPTSoVits (Python 3.10)
-#   3. 克隆 GPT-SoVITS 并锁定到 README 验证过的 commit
+#   3. 克隆 GPT-SoVITS 修复分支 (fix-nonstream-threadpool; docker/Dockerfile
+#      的引擎镜像则锁定到该分支的 commit SHA, 见 deployment.md)
 #   4. 运行上游 install.sh --device CU128 --source ModelScope
 #   5. 应用版本修复 (见下), 这些坑在本仓库 README 有记录
 #
@@ -105,4 +106,6 @@ python -c "import torch, torchaudio; print('torch', torch.__version__, 'cuda_ava
 ffmpeg -version | head -1
 
 echo
-echo "[完成] 环境就绪。启动服务: bash tools/start_tts_api.sh [端口]"
+echo "[完成] 环境就绪 (conda 环境 $ENV_NAME)。"
+echo "  训练/本地推理: python training/train_chii.py   (或 cd GPT-SoVITS && python webui.py 浏览器界面)"
+echo "  部署 HTTP 服务不需要本 conda 环境 —— 见 docs/deployment.md (docker 引擎 + 门面 .venv)"

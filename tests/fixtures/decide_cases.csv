@@ -1,0 +1,15 @@
+name,raw_text,dur,candidate,action,reason,final
+keep_normal,こんにちは,1.0,,keep,,こんにちは
+keep_normalized,チチ!,1.0,,keep,,チチ！
+keep_cps_boundary,あいうえおかきくけこさしすせそ,1.0,,keep,,あいうえおかきくけこさしすせそ
+keep_cps_under,チー作ったの誰か知らない,2.0,,keep,,チー作ったの誰か知らない
+keep_dur_zero,ぴかぴか,0.0,,keep,,ぴかぴか
+repair_repeat,超火火火火火火火火,1.06,ちー,repaired,repeat,ちー
+repair_latin,チatsächlich,1.61,ちー,repaired,latin,ちー
+repair_short,海,1.55,ちぃ,repaired,short,ちぃ
+repair_cps,あいうえおかきくけこさしすせそ,0.5,ちー,repaired,cps,ちー
+repair_candidate_normalized,チ элект,1.19,ちぃ!,repaired,latin,ちぃ！
+drop_repeat_no_candidate,ああああああああ,1.0,,dropped,repeat,
+drop_latin_dirty_candidate,Gパソコン,1.91,abc def,dropped,latin,
+drop_short_no_candidate,着,2.69,,dropped,short,
+drop_cps_dirty_candidate,あいうえおかきくけこさしすせそた,1.0,hello,dropped,cps,

@@ -1,5 +1,7 @@
 # 门面 (tools/server.py) 依赖: 鉴权/限流 + 反向代理容器内引擎
 # 推理引擎 (GPT-SoVITS api_v2) 的依赖在 docker/Dockerfile 内安装, 不在宿主机
-fastapi
-uvicorn
-httpx
+# 版本组合已在 Python 3.12 + 门面测试套件验证（2026-09-16）
+fastapi==0.141.1
+uvicorn==0.53.0
+httpx==0.28.1
+# 测试依赖 (仅跑 tests/ 需要, 门面运行不需要): pytest==9.1.1

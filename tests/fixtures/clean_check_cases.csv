@@ -1,0 +1,12 @@
+name,text,usable
+usable_sentence,チー作ったの誰か知らない,1
+kana_len_two,ちぃ,1
+kana_len_one,あ,0
+kana_with_half_punct_len_one,あ!,0
+kana_with_full_punct,あ？,1
+kanji_only,桜花,0
+digit_only,12345,0
+latin,hello,0
+cyrillic,элект,0
+repeat_eight,ああああああああ,0
+repeat_seven_ok,あああああああい,1

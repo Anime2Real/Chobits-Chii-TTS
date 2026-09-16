@@ -80,6 +80,7 @@ Chobits-Chii-TTS/
 ├── LICENSE                 # CC BY-NC-SA 4.0
 ├── .gitignore
 ├── requirements.txt        # 门面依赖 (引擎依赖在镜像内安装)
+├── deploy/                 # 部署模板 (systemd unit + env 示例)
 ├── docker/                 # 推理引擎镜像 (GPT-SoVITS api_v2, 无鉴权)
 │   ├── Dockerfile             # conda 环境 + 锁定 commit 的引擎源码 + 运行数据
 │   └── entrypoint.sh          # 模型就位检查/下载 + 生成推理配置 + 拉起 api_v2
@@ -97,6 +98,7 @@ Chobits-Chii-TTS/
 │   └── start_tts_api.sh       # 启动门面 (可直接运行或供 systemd 调用)
 ├── training/               # 训练流水线
 │   └── train_chii.py          # 预处理 + SoVITS/GPT 微调一键驱动 (幂等, 可续跑)
+├── tests/                  # pytest 测试套件 (鉴权/限流/端点行为, 引擎全 mock)
 ├── examples/               # 示例
 │   ├── ref_text.txt           # 参考音频文本 (ep07_00783.96s)
 │   └── target_text.txt        # 推理示例文本
@@ -203,7 +205,7 @@ pyopenjtalk 加载新版 libstdc++（Ubuntu 20.04 系统库缺 `GLIBCXX_3.4.29`�
 推理只需要[模型文件](#模型文件)中的权重，无需训练数据。部署采用与家族其他服务一致的引擎/门面分离架构：
 
 - **引擎**（Docker 容器）：上游 GPT-SoVITS `api_v2`，加载 chii 权重做合成，无鉴权，只发布到 `127.0.0.1:9882`
-- **门面**（宿主机 `tools/server.py`）：唯一对外入口，API Key 鉴权 + 每 IP 限流 + OpenAI TTS 垫片 + 可选 TLS，监听 `0.0.0.0:9880`
+- **门面**（宿主机 `tools/server.py`）：唯一对外入口，API Key 鉴权 + 每 IP 限流 + OpenAI TTS 垫片 + 可选 TLS，默认绑 `127.0.0.1:9880`（生产由 Caddy 反代终结 TLS，见 docs/deployment.md）
 
 ```bash
 # 1. 构建引擎镜像 (国内网络建议加镜像 build-arg, 见 docs/deployment.md)
@@ -218,27 +220,29 @@ docker run -d --name chobits-chii-tts-engine \
   -v $PWD/models:/data/models:ro \
   chobits-chii-tts-engine
 
-# 3. 启动门面 (0.0.0.0:9880; 首次运行自动建 .venv)
+# 3. 启动门面 (默认绑 127.0.0.1:9880; 首次运行自动建 .venv)
 export CHII_TTS_API_KEY=<随机密钥>   # 必填, 未设置会拒绝启动
 bash tools/start_tts_api.sh 9880
 ```
 
-生产环境用 systemd 守护门面（密钥经 `EnvironmentFile` 注入）+ docker `--restart` 守护引擎，
-HTTPS（自签名证书）在门面层启用；unit / env 示例与验证步骤见 **[docs/deployment.md](docs/deployment.md)**。
+> 门面依赖兄弟仓库的共享库 [chii-facade-common](https://github.com/Anime2Real/Chobits-Chii-CloudDeploy/tree/main/tools/chii-facade-common)（鉴权/限流/env 解析等两门面公共逻辑的唯一真相源）。`start_tts_api.sh` 首次建 venv 时自动从同级目录 `../Chobits-Chii-CloudDeploy/tools/chii-facade-common` 以 editable 方式安装；单仓库 clone 需先同级 clone CloudDeploy 仓库，或手动 `pip install -e ../Chobits-Chii-CloudDeploy/tools/chii-facade-common`。改动共享库后须重启门面生效。
 
-OpenAI TTS 兼容调用（推荐；客户端 `baseUrl` 填 `http(s)://<服务器IP>:9880/v1`，
+生产环境用 systemd 守护门面（密钥经 `EnvironmentFile` 注入）+ docker `--restart` 守护引擎；
+TLS 由 Caddy 在 443 终结（门面绑回环），unit / env 示例与验证步骤见 **[docs/deployment.md](docs/deployment.md)**。
+
+OpenAI TTS 兼容调用（推荐；在服务器本机验证用 `http://127.0.0.1:9880/v1`；公网由 Caddy 443 →
+垫片转发到门面，客户端 `baseUrl` 填 `https://<服务器IP>/chobits/v1`，见 docs/deployment.md。
 `GET /v1/models` 返回固定模型 `chii-tts`，`voice` 当前仅 `chii`，`response_format` 支持
 `wav`/`aac`/`opus`，默认 `wav`。`wav` 为流式输出（边合成边推流，首字延迟低；多句文本
 由门面按句串行合成并合并 PCM 流，规避引擎流式模式多片段并行批推理会截断音频的 bug，
 且上游在产出音频前失败时返回 502/503 而非 200 空流）；`aac`/`opus` 为合成完成后一次性返回）：
 
 ```bash
-curl -k -X POST https://<服务器IP>:9880/v1/audio/speech \
+curl -X POST http://127.0.0.1:9880/v1/audio/speech \
   -H "Authorization: Bearer <API_KEY>" \
   -H 'Content-Type: application/json' \
   -d '{"model": "chii-tts", "input": "ちぃ、秀樹のこと、大好き。", "voice": "chii"}' \
   -o out.wav
-# 未启用 TLS 时把 https 换成 http、去掉 -k 即可
 ```
 
 原生 `/tts` 调用示例（GET query / POST JSON 经参数白名单透传到引擎；`ref_audio_path` 为**引擎容器内**路径，
@@ -246,7 +250,7 @@ curl -k -X POST https://<服务器IP>:9880/v1/audio/speech \
 密钥只走 `Authorization: Bearer`，`?api_key=` 已弃用——query string 会进访问日志）：
 
 ```bash
-curl -k -G https://<服务器IP>:9880/tts \
+curl -G http://127.0.0.1:9880/tts \
   -H "Authorization: Bearer <API_KEY>" \
   --data-urlencode "text=ちぃ、秀樹のこと、大好き。" \
   --data-urlencode "text_lang=ja" \
@@ -254,22 +258,23 @@ curl -k -G https://<服务器IP>:9880/tts \
   --data-urlencode "prompt_lang=ja" \
   --data-urlencode "prompt_text=秀樹は地位を拾ってくれた" \
   --data-urlencode "media_type=wav" -o out.wav
-# 未启用 TLS 时把 https 换成 http、去掉 -k 即可
 ```
 
-其他环境变量：`CHII_TTS_RATE_LIMIT`（`/tts` 与 `/v1/audio/speech` 每 IP 每分钟限流次数，默认 60，0 关闭）；
+其他环境变量：`CHII_TTS_BIND`（门面监听地址，默认 `127.0.0.1`；不经 Caddy 直接对外须配下方 SSL env，否则非回环绑定启动告警）；
+`CHII_TTS_RATE_LIMIT`（`/tts` 与 `/v1/audio/speech` 每 IP 每分钟限流次数，默认 60，0 关闭）；
 `CHII_TTS_ENGINE_URL`（引擎地址，默认 `http://127.0.0.1:9882`）；
 `CHII_TTS_SSL_CERTFILE` / `CHII_TTS_SSL_KEYFILE`（同时设置时以 HTTPS 启动）；
 `CHII_TTS_REF_AUDIO` / `CHII_TTS_REF_TEXT_FILE`（覆盖 OpenAI 垫片 `chii` 音色的参考音频/参考文本路径，
 前者为容器内路径，后者为宿主机路径）；
 `CHII_TTS_DEEP_PROBE_TTL` / `CHII_TTS_DEEP_PROBE_TIMEOUT`（深度健康检查结果缓存秒数 / 探测超时秒数，默认 30 / 20）。
 
-健康检查：`GET /v1/models` 为进程级轻量存活；`GET /healthz/deep` 为深度检查——用极短文本向引擎
+健康检查：`GET /healthz` 为免鉴权浅探活（进程级，不触引擎、不暴露指纹）；`GET /healthz/deep` 为深度检查——用极短文本向引擎
 发一次真实合成（能发现引擎"返回 200 空流"的变砖状态），引擎健康返回 200 `{"status":"ok",...}`，
 异常返回 503 `{"status":"degraded",...}`；结果按 `CHII_TTS_DEEP_PROBE_TTL` 缓存避免高频探测烧 GPU。
-两者与其他端点一样须带 API key。
+`/healthz/deep` 与其他端点一样须带 API key。
 
-注意在云安全组放行 TCP 9880（9882 只绑回环，无需放行）；对外提供服务须遵守 [CC BY-NC-SA 4.0](#许可协议)（非商业）。
+Caddy 架构（2026-09-12 起，见 [docs/deployment.md](docs/deployment.md)）下门面绑回环、公网只放行 TCP 443，
+安全组**不需要**放行 9880/9882（9882 只绑回环）；对外提供服务须遵守 [CC BY-NC-SA 4.0](#许可协议)（非商业）。
 面向公众分发应用时建议由后端服务代为调用，不要把唯一密钥嵌进客户端。
 
 ## 许可协议

@@ -25,10 +25,10 @@ def reset_global_state():
 
     信号量置 None 让端点在运行中的事件循环里重建（Python 3.8 的
     asyncio.Semaphore 创建即绑定 loop，跨 TestClient 复用会绑错 loop）。"""
-    server._hits.clear()
+    server._rate_limiter.clear()
     server._inflight_sem = None
     yield
-    server._hits.clear()
+    server._rate_limiter.clear()
     server._inflight_sem = None
 
 

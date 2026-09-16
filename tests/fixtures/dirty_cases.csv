@@ -1,0 +1,16 @@
+name,text,reason
+normal_kana,こんにちは,
+long_sentence,チー作ったの誰か知らない,
+repeat_eight,ああああああああ,repeat
+repeat_katakana_long,キィィィィィィィィ,repeat
+repeat_precedence_latin,aaaaaaaa,repeat
+repeat_precedence_short,????????,repeat
+latin_mixed_katakana,チ элект,latin
+latin_german,チatsächlich,latin
+latin_accented,Àbientôt,latin
+single_cjk,海,short
+single_kana,ち,short
+punctuation_only,…。、,short
+whitespace_only,   ,short
+repeat_seven_ok,あああああああい,
+repeat_seven_exact,あああああああ,

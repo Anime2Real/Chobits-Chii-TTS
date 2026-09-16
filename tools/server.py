@@ -54,70 +54,50 @@ wav 流式路径的门面侧加固 (引擎流式模式多句并行批推理会�
 仅对非流式 (aac/opus) 生效——引擎 parallel_infer 批推理在流式模式下不启用
 (见 GPT_SoVITS/TTS_infer_pack/TTS.py)。
 
-启动: python tools/server.py [端口, 默认 9880]  (绑 0.0.0.0)
+启动: python tools/server.py [端口, 默认 9880]  (默认绑 127.0.0.1, 生产由 Caddy 反代;
+                                     显式绑非回环地址须同时配 TLS, 否则启动告警)
 """
 
 from __future__ import annotations  # 宿主机 Python 3.8 (Ubuntu 20.04) 兼容
 
 import asyncio
-import hashlib
-import hmac
 import json
 import os
 import re
 import sys
 import time
-from collections import defaultdict, deque
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from chii_facade_common import (
+    ApiKeyAuth,
+    EnvConfig,
+    SlidingWindowRateLimiter,
+    client_ip as _client_ip,
+    engine_error_body,
+    extract_bearer_token,
+    filter_response_headers,
+)
 
-def _getenv(suffix: str, default: str = "") -> str:
-    """读取 CHII_TTS_<suffix> 环境变量."""
-    return os.environ.get(f"CHII_TTS_{suffix}", default)
+# 公共逻辑（env 容错解析 / XFF 真实 IP / key 校验 / 限流桶 / 错误通用化 / 响应头白名单）
+# 源自共享库 chii_facade_common（CloudDeploy 仓库 tools/chii-facade-common，兄弟目录 editable 安装）：
+# 安全加固只改共享库一处，两门面同步生效，勿在本地重建副本。
 
-
-def _getenv_int(suffix: str, default: int) -> int:
-    """整型配置容错：非法值回退默认并告警（直接 traceback 会被 Restart=always 放大成崩溃循环）。"""
-    raw = _getenv(suffix)
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        print(f"[警告] CHII_TTS_{suffix}={raw!r} 不是合法整数，回退默认值 {default}", file=sys.stderr)
-        return default
-
-
-def _getenv_float(suffix: str, default: float) -> float:
-    """浮点配置容错：同 _getenv_int 的理由。"""
-    raw = _getenv(suffix)
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        print(f"[警告] CHII_TTS_{suffix}={raw!r} 不是合法数值，回退默认值 {default}", file=sys.stderr)
-        return default
-
-
-def _client_ip(host: str, headers) -> str:
-    """真实客户端 IP：对端为本机（Caddy/LLM 垫片）时采信 X-Forwarded-For
-    最后一跳（反代把真实 IP 追加在尾部，取第一跳会被伪造）；直连不采信 XFF。
-    垫片透传语音请求时已带上 X-Forwarded-For: <真实客户端 IP>。"""
-    if host == "127.0.0.1":
-        xff = headers.get("x-forwarded-for", "")
-        if xff:
-            return xff.split(",")[-1].strip()
-    return host
+_env = EnvConfig("CHII_TTS_")
+_getenv = _env.get
+_getenv_int = _env.get_int
+_getenv_float = _env.get_float
 
 
 API_KEY = _getenv("API_KEY")
 if not API_KEY:
     sys.exit("[错误] 未设置 CHII_TTS_API_KEY 环境变量, 拒绝以无鉴权方式启动")
+
+_auth = ApiKeyAuth(API_KEY)
+_key_ok = _auth.key_ok
 
 RATE_LIMIT = _getenv_int("RATE_LIMIT", 60)
 # 资源防护：文本长度硬上限 + 全局在途并发上限（TTS 推理昂贵，单请求长文本
@@ -144,7 +124,9 @@ _client = httpx.AsyncClient(
     timeout=httpx.Timeout(connect=10.0, read=600.0, write=120.0, pool=60.0),
 )
 
-_hits: dict[str, deque] = defaultdict(deque)
+# /tts 与 /v1/audio/speech 的每 IP 滑动窗口限流桶（共享库 SlidingWindowRateLimiter）；
+# RATE_LIMIT 在检查路径上同步进 limiter，保持 monkeypatch 模块常量即时生效的行为不变
+_rate_limiter = SlidingWindowRateLimiter(RATE_LIMIT)
 # /tts 与 /v1/audio/speech 的全局在途并发信号量（保护 GPU）。限流管请求数管不了
 # 单请求成本（长文本独占 GPU 数分钟）；并发控制在端点层执行而非中间件——
 # BaseHTTPMiddleware 的 call_next 拿到响应头即返回，流式合成数分钟的 GPU 占用
@@ -394,11 +376,9 @@ async def _proxy_to_engine(method: str, **kwargs) -> StreamingResponse | JSONRes
         body = await upstream.aread()
         print(f"[tts] engine {upstream.status_code}: {body[:200]!r}", file=sys.stderr)
         await upstream.aclose()
-        return JSONResponse(status_code=502, content={"message": "tts engine error"})
+        return JSONResponse(status_code=502, content=engine_error_body("tts", body_key="message"))
 
-    headers = {}
-    if ct := upstream.headers.get("content-type"):
-        headers["content-type"] = ct
+    headers = filter_response_headers(upstream.headers)
 
     async def body_iter():
         try:
@@ -629,19 +609,7 @@ async def tts_passthrough(request: Request):
 
 def _extract_key(request) -> str:
     # 只认 Authorization 头；不再接受 ?api_key=（query string 会进 uvicorn/反代访问日志）
-    auth = request.headers.get("authorization", "")
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip()
-    return ""
-
-
-def _key_ok(provided: str) -> bool:
-    """常量时间比较 API key。"""
-    if not provided:
-        return False
-    return hmac.compare_digest(
-        hashlib.sha256(provided.encode()).digest(),
-        hashlib.sha256(API_KEY.encode()).digest())
+    return extract_bearer_token(request.headers)
 
 
 @APP.middleware("http")
@@ -655,16 +623,9 @@ async def auth_and_rate_limit(request, call_next):
     # 单调时钟（系统时钟回拨不会把窗口拉长）
     if RATE_LIMIT > 0 and limited_path:
         ip = _client_ip(request.client.host if request.client else "unknown", request.headers)
-        now = time.monotonic()
-        q = _hits[ip]
-        while q and now - q[0] > 60:
-            q.popleft()
-        if not q:
-            _hits.pop(ip, None)
-            q = _hits[ip]
-        if len(q) >= RATE_LIMIT:
+        _rate_limiter.limit = RATE_LIMIT
+        if not _rate_limiter.allow(ip):
             return JSONResponse(status_code=429, content={"message": "rate limit exceeded"})
-        q.append(now)
 
     if not _key_ok(_extract_key(request)):
         return JSONResponse(status_code=401, content={"message": "invalid or missing api key"})
@@ -674,7 +635,7 @@ async def auth_and_rate_limit(request, call_next):
         # 不记明文内容；声音克隆滥用可事后追溯。
         # 在途并发上限不在此层执行（call_next 拿到响应头即返回，流式合成会落在
         # 信号量外），已下沉到端点层，见 _acquire_inflight / _hold_through_response
-        print(f"[audit] {request.url.path} key={hashlib.sha256(_extract_key(request).encode()).hexdigest()[:12]}"
+        print(f"[audit] {request.url.path} key={_auth.key_digest(_extract_key(request))}"
               f" ip={_client_ip(request.client.host if request.client else 'unknown', request.headers)}"
               f" len={request.headers.get('content-length', '?')}", file=sys.stderr)
     return await call_next(request)
