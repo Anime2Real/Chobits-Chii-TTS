@@ -1,13 +1,20 @@
-# Chobits-Chii-TTS
+<div align="center">
+	<h1>Chobits</h1>
+	<p><b>叽～</b> 小叽的语音合成模型</p>
+	<p>《人形电脑天使心》(Chobits) 中 <b>小叽 (Chii / ちぃ)</b> 角色的 TTS（语音合成）模型项目，基于 GPT-SoVITS 微调。</p>
+	<p>
+		<a href="https://madewithlove.org.in"><img alt="Made with Love" src="https://img.shields.io/badge/Made%20with-Love-ff69b4.svg"></a>
+		<a href="https://github.com/Anime2Real/Chobits-Chii-TTS"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-Chobits--Chii--TTS-181717?logo=github"></a>
+		<a href="https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice"><img alt="Dataset: Chobits-Chii-Voice" src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Chobits--Chii--Voice-yellow"></a>
+		<a href="https://huggingface.co/chenxin199305/Chobits-Chii-TTS"><img alt="Hugging Face Model" src="https://img.shields.io/badge/%F0%9F%A4%97%20Model-Chobits--Chii--TTS-yellow"></a>
+		<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="License: CC BY-NC-SA 4.0" src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg"></a>
+		<img alt="Language: Japanese" src="https://img.shields.io/badge/Language-Japanese-green.svg">
+	</p>
+</div>
 
-[![Made with Love](https://img.shields.io/badge/Made%20with-Love-ff69b4.svg)](https://madewithlove.org.in)
-[![GitHub](https://img.shields.io/badge/GitHub-Chobits--Chii--TTS-181717?logo=github)](https://github.com/Anime2Real/Chobits-Chii-TTS)
-[![Dataset: Chobits-Chii-Voice](https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Chobits--Chii--Voice-yellow)](https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice)
-[![Hugging Face Model](https://img.shields.io/badge/%F0%9F%A4%97%20Model-Chobits--Chii--TTS-yellow)](https://huggingface.co/chenxin199305/Chobits-Chii-TTS)
-[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
-[![Language: Japanese](https://img.shields.io/badge/Language-Japanese-green.svg)]()
+> 💖 如果这个项目对你有帮助，欢迎在 [GitHub](https://github.com/Anime2Real/Chobits-Chii-TTS) 点个 Star —— 你的支持能让更多人发现小叽！
 
-> ✅ 首轮模型已训练完成并人工试听通过（GPT-SoVITS v2Pro，e10 checkpoint），权重已发布到 [Hugging Face](https://huggingface.co/chenxin199305/Chobits-Chii-TTS)，见[模型文件](#模型文件)。
+> ✅ 首轮模型已训练完成并人工试听通过（GPT-SoVITS v2Pro，e10 checkpoint），权重已发布到 [Hugging Face](https://huggingface.co/chenxin199305/Chobits-Chii-TTS)，见[模型文件](#-模型文件)。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 TTS（语音合成）模型项目。
 
@@ -15,14 +22,14 @@
 
 > ⚠️ 注意：原始动画音频的版权归其权利方所有。本项目仅供学习与研究使用，请勿用于商业用途。
 
-## 示例试听
+## 🎧 示例试听
 
 https://github.com/user-attachments/assets/06c1976c-84c9-4fd2-b472-d5cdfe9be485
 
 合成文本（`examples/target_text.txt`）：`ちぃ、秀樹のこと、大好き。ずっと一緒にいる。`
 （GPT-SoVITS v2Pro · e10 checkpoint 合成）
 
-## 数据
+## 📊 数据
 
 训练数据来自 [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) 数据集（[Hugging Face](https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice)）：
 
@@ -37,7 +44,7 @@ https://github.com/user-attachments/assets/06c1976c-84c9-4fd2-b472-d5cdfe9be485
 
 数据集的 `metadata.csv` 标注格式与 GPT-SoVITS 训练输入格式兼容，可直接用于微调。
 
-## 训练路线
+## 🛤️ 训练路线
 
 基于 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 的少样本语音克隆流程（v2Pro，2026-08 已跑通首轮）：
 
@@ -48,9 +55,9 @@ https://github.com/user-attachments/assets/06c1976c-84c9-4fd2-b472-d5cdfe9be485
 5. **推理评估**：✅ 首轮合成已产出 `outputs/inference/e{5,10,15}/output.wav`（32kHz）。人工试听选定 **e10**（`chi-e10.ckpt` + `chi_e10_s1210.pth`）为当前首选
 6. **迭代优化**：根据试听结果调整 epochs / 参考音频 / 数据量，必要时换 v4 对比
 
-复现命令见下方[快速开始](#快速开始从零复现)。
+复现命令见下方[快速开始](#-快速开始从零复现)。
 
-## 模型文件
+## 📦 模型文件
 
 当前首选权重（人工试听选定，v2Pro，e10）已发布到 Hugging Face：
 **[huggingface.co/chenxin199305/Chobits-Chii-TTS](https://huggingface.co/chenxin199305/Chobits-Chii-TTS)**
@@ -72,7 +79,7 @@ hf download chenxin199305/Chobits-Chii-TTS --local-dir models/
 下载后可直接推理（见快速开始第 5 步，将权重路径替换为 `models/` 内文件），无需训练。
 本地训练产生的全部 checkpoint 在 `GPT-SoVITS/GPT_weights_v2Pro/` 与 `GPT-SoVITS/SoVITS_weights_v2Pro/`（e5/e10/e15），试听样本在 `outputs/inference/`。
 
-## 仓库结构
+## 🗂 仓库结构
 
 ```
 Chobits-Chii-TTS/
@@ -107,9 +114,12 @@ Chobits-Chii-TTS/
 └── outputs/                # 试听音频等产物 (不入库)
 ```
 
-## 快速开始（从零复现）
+## 🚀 快速开始（从零复现）
 
 以下步骤在 Ubuntu 24.04 + RTX 4060 Laptop 8GB 上实测通过（2026-08）。国内网络已按镜像优化。
+
+> **小叽提示 (・ω・)ノ**：只想让小叽开口说话、不想从头训练？权重已在 Hugging Face 发布，
+> 下载后可直接推理（见[模型文件](#-模型文件)），无需走完下方全部步骤。
 
 ### 1. 获取训练数据
 
@@ -196,13 +206,13 @@ python GPT_SoVITS/inference_cli.py \
 pyopenjtalk 加载新版 libstdc++（Ubuntu 20.04 系统库缺 `GLIBCXX_3.4.29`，需用 conda 环境的）。
 也可以 `python webui.py` 启动浏览器界面操作（localhost:9874）。
 
-> 权重已在 Hugging Face 发布，不想训练可直接下载（见[模型文件](#模型文件)）；
+> 权重已在 Hugging Face 发布，不想训练可直接下载（见[模型文件](#-模型文件)）；
 > 参考音频可用 `data/wavs/` 中任意一条 3–8 秒的片段替代
 > （`ref_text.txt` 内容需与音频一致，参考 `data/metadata.csv`）。
 
-## 部署为 HTTP 服务
+## 🌐 部署为 HTTP 服务
 
-推理只需要[模型文件](#模型文件)中的权重，无需训练数据。部署采用与家族其他服务一致的引擎/门面分离架构：
+推理只需要[模型文件](#-模型文件)中的权重，无需训练数据。部署采用与家族其他服务一致的引擎/门面分离架构：
 
 - **引擎**（Docker 容器）：上游 GPT-SoVITS `api_v2`，加载 chii 权重做合成，无鉴权，只发布到 `127.0.0.1:9882`
 - **门面**（宿主机 `tools/server.py`）：唯一对外入口，API Key 鉴权 + 每 IP 限流 + OpenAI TTS 垫片 + 可选 TLS，默认绑 `127.0.0.1:9880`（生产由 Caddy 反代终结 TLS，见 docs/deployment.md）
@@ -274,10 +284,10 @@ curl -G http://127.0.0.1:9880/tts \
 `/healthz/deep` 与其他端点一样须带 API key。
 
 Caddy 架构（2026-09-12 起，见 [docs/deployment.md](docs/deployment.md)）下门面绑回环、公网只放行 TCP 443，
-安全组**不需要**放行 9880/9882（9882 只绑回环）；对外提供服务须遵守 [CC BY-NC-SA 4.0](#许可协议)（非商业）。
+安全组**不需要**放行 9880/9882（9882 只绑回环）；对外提供服务须遵守 [CC BY-NC-SA 4.0](#-许可协议)（非商业）。
 面向公众分发应用时建议由后端服务代为调用，不要把唯一密钥嵌进客户端。
 
-## 许可协议
+## 📄 许可协议
 
 本项目的派生内容遵循数据集的 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans)（署名-非商业性使用-相同方式共享）协议：
 
@@ -285,13 +295,13 @@ Caddy 架构（2026-09-12 起，见 [docs/deployment.md](docs/deployment.md)）�
 - **非商业性使用 (NC)**：不得用于商业目的。
 - **相同方式共享 (SA)**：衍生作品须以相同协议发布。
 
-## 免责声明
+## ⚠️ 免责声明
 
 - 本项目仅用于学术研究与个人学习，不构成对原作品版权的任何主张。
 - 使用本项目训练的模型所生成的内容，不得用于侵犯原作品及相关声优（田中理惠）权益的用途。
 - 若权利方提出要求，本项目将被下架。
 
-## 相关项目
+## 🙏 相关项目
 
 - [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) — 小叽语音数据集（本项目的数据来源）
 - [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) — 底层语音合成框架
