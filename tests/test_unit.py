@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -253,3 +254,19 @@ def test_acquire_inflight_queue_timeout_429(monkeypatch):
         asyncio.run(run())
     finally:
         server._inflight_sem = None
+
+
+# --- BIND 非回环守卫（对齐 ASR：未配 TLS 拒绝启动，而非仅告警） --------------------
+
+def test_bind_non_loopback_without_tls_refuses_startup():
+    # 模块级守卫在 import 时执行：子进程设 CHII_TTS_BIND=0.0.0.0 不配 TLS 导入即须退出
+    env = dict(os.environ, CHII_TTS_BIND="0.0.0.0")
+    env.pop("CHII_TTS_SSL_CERTFILE", None)
+    env.pop("CHII_TTS_SSL_KEYFILE", None)
+    tools_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools")
+    proc = subprocess.run([sys.executable, "-c", "import server"],
+                          cwd=tools_dir, env=env, capture_output=True, timeout=120)
+    assert proc.returncode != 0
+    # 子进程 stderr 编码随 locale（utf-8/gbk），两种编码都要能匹配到报错文案
+    assert any("拒绝启动".encode(enc) in proc.stderr for enc in ("utf-8", "gbk"))
+    assert b"CHII_TTS_SSL_CERTFILE" in proc.stderr

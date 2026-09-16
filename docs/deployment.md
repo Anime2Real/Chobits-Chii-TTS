@@ -83,7 +83,7 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 | `CHII_TTS_MAX_INFLIGHT` | `8` | 全局在途并发上限（保护 GPU）：超上限排队等待空位，`CHII_TTS_QUEUE_TIMEOUT` 秒内仍拿不到才 429；流式请求（wav 流式与 `/tts` 透传）的信号量持有到推流结束/客户端断开 |
 | `CHII_TTS_QUEUE_TIMEOUT` | `30` | 在途满员后排队等待空位的超时秒数，超时返回 429 |
 | `CHII_TTS_BATCH_SIZE` | `5` | 引擎批推理 batch_size 默认值（客户端未显式传时注入，仅非流式路径生效；流式一律钉 1） |
-| `CHII_TTS_BIND` | `127.0.0.1` | 门面监听地址（生产由 Caddy 反代；绑非回环地址须配 TLS，否则启动时告警） |
+| `CHII_TTS_BIND` | `127.0.0.1` | 门面监听地址（生产由 Caddy 反代；绑非回环地址须配 TLS，否则拒绝启动） |
 | `CHII_TTS_REF_AUDIO` | `/data/models/ref_audio.wav` | OpenAI 垫片 `chii` 音色的参考音频（**引擎容器内**路径） |
 | `CHII_TTS_REF_AUDIO_PREFIX` | `/data/` | `/tts` 透传的 ref_audio 路径前缀约束（防容器内任意路径探测） |
 | `CHII_TTS_REF_TEXT_FILE` | `models/ref_text.txt` | 参考文本（门面**宿主机**路径，读出后内联传给引擎） |
@@ -97,7 +97,7 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 > match"（返回 200 但音频截断，反复触发还会拖垮引擎致所有请求 200 空流），而引擎内部
 > 还会把单句按逗号/顿号等再切成片段（门面切句管不到，真实流量已观测到单句触发）；
 > 对单片段文本钉 1 无影响（本就只有 1 个片段进批，推理结果一致）。同时合成开始前
-> 预读上游首块，连接失败/非 200/空流返回 502/503 JSON 而非 200 空流。
+> 预读上游首块，连接失败/非 200/空流返回 502 JSON 而非 200 空流。
 > aac/opus 非流式路径不受影响。
 > 新增 `GET /healthz/deep` 深度健康检查（真实合成探测，带缓存，须 API key）；
 > 轻量存活仍用 `GET /v1/models`。

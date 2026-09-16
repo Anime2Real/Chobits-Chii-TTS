@@ -26,7 +26,7 @@ wav 流式路径的门面侧加固 (引擎流式模式多句并行批推理会�
     流式请求的 batch_size 一律钉 1 (引擎内部还会把单句再切成片段——内部切分
     含逗号/顿号等, 门面切句管不到——批推理同样触发该 bug; 对单片段文本无影响,
     本就只有 1 个片段进批);
-  - 上游即败: 合成开始前预读上游首块, 连接失败/非 200/空流时返回 502/503 JSON,
+  - 上游即败: 合成开始前预读上游首块, 连接失败/非 200/空流时返回 502 JSON,
     不发 200 空流; 已在流中的失败只能中断连接.
 
 健康检查:
@@ -55,7 +55,7 @@ wav 流式路径的门面侧加固 (引擎流式模式多句并行批推理会�
 (见 GPT_SoVITS/TTS_infer_pack/TTS.py)。
 
 启动: python tools/server.py [端口, 默认 9880]  (默认绑 127.0.0.1, 生产由 Caddy 反代;
-                                     显式绑非回环地址须同时配 TLS, 否则启动告警)
+                                     显式绑非回环地址须同时配 TLS, 否则拒绝启动)
 """
 
 from __future__ import annotations  # 宿主机 Python 3.8 (Ubuntu 20.04) 兼容
@@ -249,7 +249,7 @@ async def _engine_stream_first(payload: dict):
         req = _client.build_request("POST", "/tts", json=payload)
         upstream = await _client.send(req, stream=True)
     except httpx.HTTPError as exc:
-        raise _EngineFailure(503, f"[tts] engine unavailable: {exc.__class__.__name__}: {exc}")
+        raise _EngineFailure(502, f"[tts] engine unavailable: {exc.__class__.__name__}: {exc}")
     if upstream.status_code != 200:
         body = await upstream.aread()
         await upstream.aclose()
@@ -364,19 +364,25 @@ def _openai_error(code: int, message: str) -> JSONResponse:
 
 async def _proxy_to_engine(method: str, **kwargs) -> StreamingResponse | JSONResponse:
     """流式转发到引擎 /tts: 状态码与 Content-Type 原样回传, 客户端断开时关闭上游连接。
-    上游 5xx 响应体回写为通用错误（引擎异常含容器内路径/栈细节，不外泄）。"""
+    引擎错误体不原样回传（含容器内路径/栈细节，不外泄）：5xx 回写通用错误（502），
+    4xx 保留引擎状态码语义但回写通用拒绝体；原文进门面日志排障。
+    上游不可达回 502 通用文案（对齐 ASR 门面，不回 503、不含服务名指纹）。"""
     try:
         req = _client.build_request(method, "/tts", **kwargs)
         upstream = await _client.send(req, stream=True)
     except httpx.HTTPError as exc:
         print(f"[tts] engine unavailable: {exc.__class__.__name__}: {exc}", file=sys.stderr)
-        return JSONResponse(status_code=503, content={"message": "tts engine unavailable"})
+        return JSONResponse(status_code=502,
+                            content={"error": f"upstream error: {exc.__class__.__name__}"})
 
-    if upstream.status_code >= 500:
+    if upstream.status_code >= 400:
         body = await upstream.aread()
         print(f"[tts] engine {upstream.status_code}: {body[:200]!r}", file=sys.stderr)
         await upstream.aclose()
-        return JSONResponse(status_code=502, content=engine_error_body("tts", body_key="message"))
+        if upstream.status_code >= 500:
+            return JSONResponse(status_code=502, content=engine_error_body("tts", body_key="message"))
+        return JSONResponse(status_code=upstream.status_code,
+                            content={"message": "speech request rejected"})
 
     headers = filter_response_headers(upstream.headers)
 
@@ -644,8 +650,8 @@ async def auth_and_rate_limit(request, call_next):
 BIND = _getenv("BIND", "127.0.0.1")  # 默认只绑本机（生产由 Caddy 反代）；显式改绑公网须配 TLS
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 if BIND not in _LOOPBACK and not SSL_CERTFILE:
-    print(f"[警告] BIND={BIND} 为非回环地址但未配置 TLS，API Key 将明文过网，"
-          "建议改绑 127.0.0.1 由反代终结 TLS", file=sys.stderr)
+    sys.exit(f"[错误] BIND={BIND} 为非回环地址但未配置 TLS（CHII_TTS_SSL_CERTFILE/KEYFILE），"
+             "明文 HTTP 会泄露 API Key，拒绝启动；请配置 TLS 证书，或改绑 127.0.0.1 由 Caddy 反代终结 TLS")
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9880

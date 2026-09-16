@@ -1,4 +1,5 @@
 """tools/server.py 端点级测试：TestClient + 内存假引擎（不触真实 :9882）。"""
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -34,17 +35,20 @@ class FakeUpstream:
 
 
 class FakeEngineClient:
-    """httpx.AsyncClient 替身：记录 build_request 参数供断言，send 返回假上游。"""
+    """httpx.AsyncClient 替身：记录 build_request 参数供断言，send 返回假上游或抛异常。"""
 
-    def __init__(self, upstream=None):
+    def __init__(self, upstream=None, exc=None):
         self.requests = []
         self.upstream = upstream or FakeUpstream()
+        self.exc = exc
 
     def build_request(self, method, url, **kwargs):
         self.requests.append({"method": method, "url": url, "kwargs": kwargs})
         return self.requests[-1]
 
     async def send(self, req, stream=False):
+        if self.exc is not None:
+            raise self.exc
         return self.upstream
 
     async def post(self, url, **kwargs):
@@ -129,6 +133,50 @@ def test_rate_limit_does_not_count_other_paths(client, monkeypatch):
     # /v1/models 不限流，只计 /tts 与 /v1/audio/speech
     assert client.post("/v1/audio/speech", json={"input": "hi"}).status_code == 401
     assert client.post("/v1/audio/speech", json={"input": "hi"}).status_code == 429
+
+
+# --- 引擎错误通用化（与 ASR 门面对齐：错误体脱敏，细节只进服务端日志） -------------
+
+def test_tts_engine_4xx_body_sanitized(client, monkeypatch):
+    # 引擎 4xx 响应体原样透传会泄漏容器内路径等细节：改写为通用拒绝体，保留状态码语义
+    upstream = FakeUpstream(status_code=422,
+                            chunks=[b"engine detail: /container/path leaked"],
+                            content_type="application/json")
+    monkeypatch.setattr(server, "_client", FakeEngineClient(upstream=upstream))
+    resp = client.get("/tts", params={"text": "hi"}, headers=AUTH)
+    assert resp.status_code == 422  # 保留引擎 4xx 状态码语义
+    assert resp.json() == {"message": "speech request rejected"}
+    assert "container" not in resp.text  # 引擎内部细节不外泄
+
+
+def test_tts_engine_5xx_becomes_generic_502(client, monkeypatch):
+    upstream = FakeUpstream(status_code=500,
+                            chunks=[b"Internal: /app/engine/secret.py traceback"],
+                            content_type="application/json")
+    monkeypatch.setattr(server, "_client", FakeEngineClient(upstream=upstream))
+    resp = client.get("/tts", params={"text": "hi"}, headers=AUTH)
+    assert resp.status_code == 502
+    assert resp.json() == {"message": "tts engine error"}
+    assert "secret" not in resp.text
+
+
+def test_tts_engine_unreachable_502_generic(client, monkeypatch):
+    # 上游不可达对齐 ASR：502 + 通用文案（此前 503 "tts engine unavailable" 含服务名指纹）
+    monkeypatch.setattr(server, "_client", FakeEngineClient(exc=httpx.ConnectError("refused")))
+    resp = client.get("/tts", params={"text": "hi"}, headers=AUTH)
+    assert resp.status_code == 502
+    assert resp.json() == {"error": "upstream error: ConnectError"}
+    assert "tts" not in resp.text.lower()
+
+
+def test_speech_wav_upstream_unreachable_502(client, monkeypatch):
+    # wav 流式预读首块即上游不可达：状态码同样对齐 502（此前 503）
+    monkeypatch.setattr(server, "_client", FakeEngineClient(exc=httpx.ConnectError("refused")))
+    resp = client.post("/v1/audio/speech",
+                       json={"input": "テストです", "voice": "chii", "response_format": "wav"},
+                       headers=AUTH)
+    assert resp.status_code == 502
+    assert resp.json() == {"message": "tts engine error"}
 
 
 # --- 端点 → 引擎参数断言 ------------------------------------------------------
