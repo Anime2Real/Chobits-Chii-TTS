@@ -155,13 +155,13 @@ curl -G http://127.0.0.1:9882/tts \
   --data-urlencode "prompt_text=秀樹は地位を拾ってくれた" \
   --data-urlencode "media_type=wav" -o engine.wav
 
-# 门面 OpenAI 兼容 (baseUrl 填 http(s)://<服务器IP>:9880/v1)
-curl -k -X POST https://<服务器IP>:9880/v1/audio/speech \
+# 门面 OpenAI 兼容（Caddy 架构下客户端 baseUrl 填 https://<服务器IP>/chobits/v1，
+# 由 LLM 垫片转发本机门面；直调门面验证用本机回环 http://127.0.0.1:9880/v1）
+curl -X POST http://127.0.0.1:9880/v1/audio/speech \
   -H "Authorization: Bearer <API_KEY>" \
   -H 'Content-Type: application/json' \
   -d '{"model": "chii-tts", "input": "ちぃ、秀樹のこと、大好き。", "voice": "chii"}' \
   -o out.wav
-# 未启用 TLS 时把 https 换成 http、去掉 -k 即可
 ```
 
 `GET /v1/models` 返回固定模型 `chii-tts`；`voice` 当前仅 `chii`；`response_format` 支持
@@ -170,12 +170,13 @@ curl -k -X POST https://<服务器IP>:9880/v1/audio/speech \
 
 ```bash
 # 深度健康检查 (真实合成探测, 结果缓存 30s; 异常时 503)
-curl -k -H "Authorization: Bearer <API_KEY>" https://<服务器IP>:9880/healthz/deep
+curl -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:9880/healthz/deep
 ```
 
-注意在云安全组放行 TCP 9880（9882 只绑回环，无需放行）；对外提供服务须遵守
-CC BY-NC-SA 4.0（非商业）。面向公众分发应用时建议由后端服务代为调用，
-不要把唯一密钥嵌进客户端。
+注意：Caddy 架构（2026-09-12 起）下门面绑回环、公网只放行 TCP 443，安全组
+**不需要**放行 9880/9882；对外提供服务须遵守 CC BY-NC-SA 4.0（非商业）。
+面向公众分发应用时应由后端服务代为调用（现网即如此：客户端 → 443 → LLM
+垫片 → 本机门面），不要把唯一密钥嵌进客户端。
 
 ## 实测记录（2026-09-10 本机迁移）
 
@@ -185,8 +186,8 @@ CC BY-NC-SA 4.0（非商业）。面向公众分发应用时建议由后端服�
 - 切换当日发现并修复：旧 unit 的 `ExecStart` 仍指向改名前的 `Chobits-Chi-TTS` 目录
   （仓库改名后未同步，运行中的旧进程不受影响，但任何 restart/reboot 都会失败）——
   已改为现路径并补 `After=docker.service`。**迁移旧部署时务必先核对 unit 内路径。**
-- 现网 env 启用了 TLS，门面日志应为 `Uvicorn running on https://...`；
-  验证时用 `curl -k https://...`（http 探测会得到空响应，属预期）。
+- ~~现网 env 启用了 TLS，门面日志应为 `Uvicorn running on https://...`~~
+  （2026-09-12 起门面已关 TLS、绑回环，TLS 由 Caddy 终结；日志为 http://127.0.0.1）。
 
 ## 从旧 systemd 部署迁移（2026-09 之前的宿主内 Conda 部署）
 
