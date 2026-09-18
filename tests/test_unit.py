@@ -270,3 +270,139 @@ def test_bind_non_loopback_without_tls_refuses_startup():
     # 子进程 stderr 编码随 locale（utf-8/gbk），两种编码都要能匹配到报错文案
     assert any("拒绝启动".encode(enc) in proc.stderr for enc in ("utf-8", "gbk"))
     assert b"CHII_TTS_SSL_CERTFILE" in proc.stderr
+
+
+# --- _read_body_capped（请求体大小上限） ----------------------------------------
+
+class _FakeBodyRequest:
+    """最小 Request 替身：headers.get + async stream()；consumed 记录流是否被读。"""
+
+    def __init__(self, chunks=(), headers=None):
+        self._chunks = list(chunks)
+        self.headers = headers or {}
+        self.consumed = False
+
+    async def stream(self):
+        self.consumed = True
+        for chunk in self._chunks:
+            yield chunk
+
+
+def _read(req):
+    return asyncio.run(server._read_body_capped(req))
+
+
+def test_read_body_capped_content_length_precheck(monkeypatch):
+    # Content-Length 超限直接 413, 不消耗请求体 (超大 JSON 不进内存的关键)
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 10)
+    req = _FakeBodyRequest(chunks=[b"x" * 100], headers={"content-length": "100"})
+    body, err = _read(req)
+    assert body is None
+    assert err.status_code == 413
+    assert json.loads(bytes(err.body))["code"] == "payload_too_large"
+    assert not req.consumed
+
+
+def test_read_body_capped_stream_fallback(monkeypatch):
+    # 无 Content-Length (chunked): 按流累计, 未超限正常返回完整体
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 10)
+    req = _FakeBodyRequest(chunks=[b"abc", b"defg"])
+    body, err = _read(req)
+    assert err is None
+    assert body == b"abcdefg"
+
+
+def test_read_body_capped_stream_over_limit(monkeypatch):
+    # 无 Content-Length 但累计超限 → 413
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 5)
+    req = _FakeBodyRequest(chunks=[b"abc", b"def"])
+    body, err = _read(req)
+    assert body is None
+    assert err.status_code == 413
+    assert json.loads(bytes(err.body))["code"] == "payload_too_large"
+
+
+def test_read_body_capped_invalid_content_length_falls_back(monkeypatch):
+    # 非法 Content-Length 不崩溃: 视为未知, 走累计兜底
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 100)
+    req = _FakeBodyRequest(chunks=[b"{}"], headers={"content-length": "not-a-number"})
+    body, err = _read(req)
+    assert err is None
+    assert body == b"{}"
+
+
+def test_read_body_capped_empty_body(monkeypatch):
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 100)
+    body, err = _read(_FakeBodyRequest())
+    assert err is None
+    assert body == b""
+
+
+# --- _ref_audio_path_allowed（ref_audio 路径穿越防护） ---------------------------
+
+@pytest.mark.parametrize("path", [
+    "/data/../../etc/passwd",
+    "/data/../secret.wav",
+    "/data/..",
+    "/data/../..",
+    "/etc/passwd",
+    "/datax/models/a.wav",        # 前缀相近但不同的目录
+    "/data",                      # 前缀目录本身, 不是其内文件
+    "/data/",
+    "relative/data/a.wav",
+])
+def test_ref_audio_traversal_rejected(path):
+    assert not server._ref_audio_path_allowed(path)
+
+
+@pytest.mark.parametrize("path", [
+    "/data/models/ref_audio.wav",
+    "/data/a.wav",
+    "/data/./models/ref_audio.wav",    # 归一化后落在前缀内 → 放行
+    "/data//models//ref_audio.wav",    # 冗余分隔符折叠 → 放行
+    "/data/sub/../a.wav",
+])
+def test_ref_audio_normalized_allowed(path):
+    assert server._ref_audio_path_allowed(path)
+
+
+def test_ref_audio_local_dir_not_a_file_rejected(monkeypatch, tmp_path):
+    # 宿主机本地可见时的 defense-in-depth: 目录不是可用参考音频
+    monkeypatch.setattr(server, "REF_AUDIO_PREFIX", str(tmp_path))
+    subdir = tmp_path / "sub"
+    subdir.mkdir()
+    assert not server._ref_audio_path_allowed(str(subdir))
+    # 本地常规文件 → 放行
+    real = tmp_path / "real.wav"
+    real.write_bytes(b"x")
+    assert server._ref_audio_path_allowed(str(real))
+
+
+def test_ref_audio_local_symlink_escape_rejected(monkeypatch, tmp_path):
+    # 前缀内符号链接指向外部文件: 字面上在前缀内, realpath 复核须拒绝
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"x")
+    link = tmp_path / "link.wav"
+    try:
+        os.symlink(str(outside), str(link))
+    except (OSError, NotImplementedError):
+        pytest.skip("当前环境无法创建符号链接 (Windows 需开发者模式/管理员)")
+    monkeypatch.setattr(server, "REF_AUDIO_PREFIX", str(tmp_path))
+    assert not server._ref_audio_path_allowed(str(link))
+    # 真实文件仍放行, 复核不误伤
+    real = tmp_path / "real.wav"
+    real.write_bytes(b"x")
+    assert server._ref_audio_path_allowed(str(real))
+
+
+# --- 参考文本缺失: 启动 WARN (不拒绝启动), /healthz/deep 带 ref_ready ------------
+
+def test_ref_text_missing_warns_at_startup_but_imports(tmp_path):
+    # 参考文本不可读: 启动打 WARN (stderr), 但进程正常启动 (只降质不变砖)
+    env = dict(os.environ, CHII_TTS_REF_TEXT_FILE=str(tmp_path / "no-such-ref.txt"))
+    tools_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools")
+    proc = subprocess.run([sys.executable, "-c", "import server"],
+                          cwd=tools_dir, env=env, capture_output=True, timeout=120)
+    assert proc.returncode == 0
+    assert any("参考文本文件不可读".encode(enc) in proc.stderr for enc in ("utf-8", "gbk"))
+    assert any("CHII_TTS_REF_TEXT_FILE".encode(enc) in proc.stderr for enc in ("utf-8", "gbk"))

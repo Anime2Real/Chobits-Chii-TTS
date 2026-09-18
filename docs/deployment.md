@@ -79,6 +79,7 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 | `CHII_TTS_API_KEY` | （必填） | API 密钥 |
 | `CHII_TTS_ENGINE_URL` | `http://127.0.0.1:9882` | 引擎地址 |
 | `CHII_TTS_RATE_LIMIT` | `60` | `/tts` 与 `/v1/audio/speech` 每 IP 每分钟限流，0 关闭 |
+| `CHII_TTS_MAX_BODY_BYTES` | `26214400` (25MB) | `/tts` POST 与 `/v1/audio/speech` 请求体大小上限，超限 413（Content-Length 预检 + 无长度时按流累计兜底）；uvicorn/Caddy 无默认 cap |
 | `CHII_TTS_MAX_TEXT_CHARS` | `2000` | 合成文本长度硬上限（两路径均生效），防长文本独占 GPU |
 | `CHII_TTS_MAX_INFLIGHT` | `8` | 全局在途并发上限（保护 GPU）：超上限排队等待空位，`CHII_TTS_QUEUE_TIMEOUT` 秒内仍拿不到才 429；流式请求（wav 流式与 `/tts` 透传）的信号量持有到推流结束/客户端断开 |
 | `CHII_TTS_QUEUE_TIMEOUT` | `30` | 在途满员后排队等待空位的超时秒数，超时返回 429 |
@@ -109,6 +110,16 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 > （覆盖显式传值并记日志），否则 `GET /tts?streaming_mode=2` 即可触发上述引擎
 > 批推理 bug 致全服务 200 空流；整型钳制参数（batch_size/top_k/sample_steps）
 > 钳制后还原 int（此前 GET 透传 "5.0" 被引擎拒成 422）。
+
+> 2026-09-18 内测前加固：① 请求体大小上限 `CHII_TTS_MAX_BODY_BYTES`（默认 25MB，
+> 对齐 ASR 批量上限量级）——Content-Length 超限直接 413（错误体含稳定 code
+> `payload_too_large`），chunked 无长度时按 `request.stream()` 累计兜底；
+> ② `/tts` 透传的 ref_audio 路径改为 normpath 归一化后判前缀：此前仅 startswith，
+> `/data/../../etc/passwd` 可穿越，现归一化后须严格落在 `CHII_TTS_REF_AUDIO_PREFIX`
+> 内（`..`/冗余分隔符折叠后再判，宿主机本地可见时再解析符号链接复核且须为常规文件）；
+> ③ 参考文本（`CHII_TTS_REF_TEXT_FILE`）缺失/为空不再静默置零样本：启动打 WARN 日志，
+> `/healthz/deep` 响应体新增 `ref_ready` 字段（状态码语义不变，引擎健康仍 200，
+> `ref_ready=false` 表示合成质量降质，运维据此告警）。
 
 ## 4. systemd 守护（生产）
 
@@ -169,6 +180,8 @@ curl -X POST http://127.0.0.1:9880/v1/audio/speech \
 
 ```bash
 # 深度健康检查 (真实合成探测, 结果缓存 30s; 异常时 503)
+# 响应体含 ref_ready: 参考文本缺失/为空时为 false —— 引擎健康仍 200,
+# 但 OpenAI 垫片在跑零样本提示, 合成质量降质 (启动日志有 WARN)
 curl -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:9880/healthz/deep
 ```
 

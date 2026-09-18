@@ -122,6 +122,20 @@ if [ ! -f "$DATA/models/chii-e10.ckpt" ] || [ ! -f "$DATA/models/chii_e10_s1210.
     fi
 fi
 
+# --- chii 参考音频/文本 (缺失时引擎照常启动但合成静默降质, 前置拦截) ---------------
+# 权重下载块只在两个权重文件缺失时触发; 只读挂载补齐权重但漏拷 ref 文件的历史场景
+# 会绕过下载直接进来, 此前引擎零样本启动且无任何报错
+for f in ref_audio.wav ref_text.txt; do
+    if [ ! -f "$DATA/models/$f" ]; then
+        echo "[engine] 参考文件缺失: $DATA/models/$f" >&2
+        echo "[engine] 缺失时合成会静默降质 (零样本), 拒绝启动。" >&2
+        echo "[engine] 修复: 该文件包含在权重仓库 $CHII_WEIGHTS_REPO 中," >&2
+        echo "[engine]   重新下载或手动放置 ref_audio.wav 与 ref_text.txt 到" >&2
+        echo "[engine]   $DATA/models/ 后重启容器。" >&2
+        exit 1
+    fi
+done
+
 # --- 代码内硬编码相对路径 → 数据卷软链 ----------------------------------------
 rm -rf "$GS/GPT_SoVITS/pretrained_models"
 ln -sfn "$DATA/pretrained_models" "$GS/GPT_SoVITS/pretrained_models"

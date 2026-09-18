@@ -34,14 +34,21 @@ wav 流式路径的门面侧加固 (引擎流式模式多句并行批推理会�
   - GET /healthz/deep   → 深度检查: 用极短文本向引擎发一次真实合成
     (短超时 CHII_TTS_DEEP_PROBE_TIMEOUT, 默认 20s), 能发现"200 空流"变砖;
     结果缓存 CHII_TTS_DEEP_PROBE_TTL 秒 (默认 30) 避免高频探测烧 GPU;
-    与其余端点一样须带 API key.
+    响应体带 ref_ready (启动时参考文本可读且非空则为 true) —— 参考文本缺失
+    时 OpenAI 垫片静默退化为零样本提示, 引擎仍健康, 状态码不变, 靠该字段
+    与启动 WARN 日志暴露降质; 与其余端点一样须带 API key.
 
 原生 /tts (GET/POST) 透传到引擎 (GET query / POST JSON)，但经参数白名单 + 数值钳制
-+ ref_audio 路径前缀约束（CHII_TTS_REF_AUDIO_PREFIX，默认 /data/）——不再暴露
++ ref_audio 路径前缀约束（CHII_TTS_REF_AUDIO_PREFIX，默认 /data/；归一化后须
+严格落在前缀内，.. 穿越与符号链接逃逸均拒绝）——不再暴露
 引擎全部参数面。流式透传 (streaming_mode 为真) 的 batch_size 一律钉 1
 （与 OpenAI 垫片 wav 流式同款规避，见上方说明）。引擎的 /control 与 /set_*_weights 不对外暴露.
 
 资源防护（TTS 推理昂贵，不设防时单请求长文本即可独占 GPU 数分钟）:
+  - 请求体大小硬上限 CHII_TTS_MAX_BODY_BYTES (默认 25MB, /tts POST 与
+    /v1/audio/speech 均生效): Content-Length 超限直接 413, 无 Content-Length
+    (chunked) 时按 request.stream() 累计兜底 —— uvicorn/Caddy 均无默认 cap,
+    不设防时持 key 即可发超大 JSON 吃内存;
   - 合成文本长度硬上限 CHII_TTS_MAX_TEXT_CHARS (默认 2000 字符, /tts 与
     /v1/audio/speech 均生效);
   - 全局在途并发上限 CHII_TTS_MAX_INFLIGHT (默认 8)：超上限不立即拒绝，
@@ -63,6 +70,7 @@ from __future__ import annotations  # 宿主机 Python 3.8 (Ubuntu 20.04) 兼容
 import asyncio
 import json
 import os
+import posixpath
 import re
 import sys
 import time
@@ -100,6 +108,10 @@ _auth = ApiKeyAuth(API_KEY)
 _key_ok = _auth.key_ok
 
 RATE_LIMIT = _getenv_int("RATE_LIMIT", 60)
+# 请求体大小硬上限（字节）：POST /tts 与 /v1/audio/speech 的 JSON 体上限，
+# 与 ASR 批量上传上限同量级（25MB）。uvicorn/Caddy 均无默认 cap，
+# 持 key 即可发超大 JSON 吃内存；chunked 可不带 Content-Length，故再按累计兜底
+MAX_BODY_BYTES = _getenv_int("MAX_BODY_BYTES", 25 * 1024 * 1024)
 # 资源防护：文本长度硬上限 + 全局在途并发上限（TTS 推理昂贵，单请求长文本
 # 经切分后可独占 GPU 数分钟，请求数限流管不了单请求成本）
 MAX_TEXT_CHARS = _getenv_int("MAX_TEXT_CHARS", 2000)
@@ -195,8 +207,20 @@ _ref_text_file = _getenv("REF_TEXT_FILE", os.path.join(REPO_ROOT, "models", "ref
 try:
     with open(_ref_text_file, encoding="utf-8") as _f:
         _ref_text = _f.read().strip()
-except OSError:
+except OSError as _exc:
     _ref_text = ""
+    # 静默置空会让 OpenAI 垫片退化为零样本提示（合成质量降质且 /healthz/deep 仍 200）：
+    # 启动即 WARN，深度健康检查响应体带 ref_ready 字段暴露该状态（见 healthz_deep）
+    print(f"[warn] 参考文本文件不可读: {_ref_text_file} ({_exc.__class__.__name__})，"
+          f"OpenAI 垫片将退化为零样本提示，合成质量可能降质；"
+          f"可用 CHII_TTS_REF_TEXT_FILE 指定正确路径", file=sys.stderr)
+if not _ref_text:
+    if os.path.exists(_ref_text_file):
+        print(f"[warn] 参考文本文件为空: {_ref_text_file}，"
+              f"OpenAI 垫片将退化为零样本提示，合成质量可能降质", file=sys.stderr)
+    REF_READY = False
+else:
+    REF_READY = True
 
 VOICES = {
     "chii": {
@@ -352,14 +376,46 @@ async def healthz_deep():
         _deep_probe.update(result, at=time.time())
         if result["status"] != "ok":
             print(f"[healthz] deep probe degraded: {result['engine']}", file=sys.stderr)
+    # ref_ready 不进状态码：参考文本缺失/为空是降质而非变砖，引擎健康仍回 200，
+    # 避免惊动监控；运维应盯 ref_ready=false 的告警（启动时门面已打 WARN 日志）
     return JSONResponse(
         status_code=200 if _deep_probe["status"] == "ok" else 503,
-        content={"status": _deep_probe["status"], "engine": _deep_probe["engine"]})
+        content={"status": _deep_probe["status"], "engine": _deep_probe["engine"],
+                 "ref_ready": REF_READY})
 
 
-def _openai_error(code: int, message: str) -> JSONResponse:
+def _openai_error(code: int, message: str, err_code: str | None = None) -> JSONResponse:
     return JSONResponse(status_code=code, content={
-        "error": {"message": message, "type": "invalid_request_error", "param": None, "code": None}})
+        "error": {"message": message, "type": "invalid_request_error", "param": None,
+                  "code": err_code}})
+
+
+def _payload_too_large() -> JSONResponse:
+    """请求体超限的 413 错误体：与门面其余 4xx 一致脱敏，另带稳定 code 便于客户端分支。"""
+    return JSONResponse(status_code=413, content={
+        "message": f"请求体过大（上限 {MAX_BODY_BYTES // (1024 * 1024)}MB）",
+        "code": "payload_too_large"})
+
+
+async def _read_body_capped(request: Request) -> tuple[bytes | None, JSONResponse | None]:
+    """读取请求体并施加 MAX_BODY_BYTES 上限。Content-Length 超限直接 413（不读体）；
+    无/非法 Content-Length（chunked 可不带长度）按 request.stream() 累计兜底。
+    返回 (body, error)，error 非 None 时 body 为 None。"""
+    length = request.headers.get("content-length")
+    if length:
+        try:
+            if int(length) > MAX_BODY_BYTES:
+                return None, _payload_too_large()
+        except ValueError:
+            pass  # 非法 Content-Length 交给累计兜底
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > MAX_BODY_BYTES:
+            return None, _payload_too_large()
+    return b"".join(chunks), None
 
 
 async def _proxy_to_engine(method: str, **kwargs) -> StreamingResponse | JSONResponse:
@@ -404,9 +460,13 @@ async def openai_models():
 
 @APP.post("/v1/audio/speech")
 async def openai_audio_speech(request: Request):
+    body_bytes, too_large = await _read_body_capped(request)
+    if too_large is not None:
+        return _openai_error(413, f"请求体过大（上限 {MAX_BODY_BYTES // (1024 * 1024)}MB）",
+                             err_code="payload_too_large")
     try:
-        body = await request.json()
-    except (ValueError, json.JSONDecodeError):
+        body = json.loads(body_bytes)
+    except ValueError:
         return _openai_error(400, "请求体不是合法 JSON")
     text = str(body.get("input") or "").strip()
     if not text:
@@ -479,6 +539,30 @@ async def openai_audio_speech(request: Request):
 # ref_audio_path 可指向容器内任意路径（文件存在性 oracle / /dev/urandom 挂死引擎），
 # batch_size/super_sampling 等采样参数可放大 GPU 消耗，还可克隆容器内任意音频） ---
 REF_AUDIO_PREFIX = _getenv("REF_AUDIO_PREFIX", "/data/")
+
+
+def _ref_audio_path_allowed(path) -> bool:
+    """ref_audio 白名单校验（值为引擎容器内 POSIX 路径，门面按字面判）：
+    归一化后须严格位于 REF_AUDIO_PREFIX 目录内。仅 startswith 判前缀会被
+    ``/data/../../etc/passwd`` 之类的 .. 路径绕过；normpath 先折叠 .. 与
+    冗余分隔符再判前缀（\"/data/../x\" → \"/x\"，拒绝；\"/data/./a.wav\" → 放行）。
+    路径在门面宿主机本地可见时（/data 卷同时挂载的场景）再 defense-in-depth：
+    解析符号链接复核仍须落在前缀内且须为常规文件；容器路径在宿主机不可见时
+    该复核自动跳过，文件存在性最终由引擎侧 4xx 兜底。"""
+    prefix = posixpath.normpath(str(REF_AUDIO_PREFIX).replace("\\", "/"))
+    norm = posixpath.normpath(str(path).replace("\\", "/"))
+    if not norm.startswith(prefix + "/"):
+        return False
+    if os.path.exists(norm):  # 本地可见才复核（引擎容器路径通常不可见）
+        real_prefix = os.path.realpath(prefix)
+        real = os.path.realpath(norm)
+        if not (real == real_prefix or real.startswith(real_prefix + os.sep)):
+            return False
+        if not os.path.isfile(norm):
+            return False
+    return True
+
+
 TTS_ALLOWED_KEYS = {
     "text", "text_lang", "prompt_text", "prompt_lang", "media_type",
     "speed_factor", "streaming_mode", "text_split_method", "fragment_interval",
@@ -537,7 +621,7 @@ def _sanitize_tts_params(items):
                 value = int(value)  # 还原整型，否则 GET 透传 "5.0" 被引擎拒成 422
         payload[key] = value
     for path in ref_audio_paths + aux_ref_audio_paths:
-        if not str(path).startswith(REF_AUDIO_PREFIX):
+        if not _ref_audio_path_allowed(path):
             return None, f"ref_audio 路径须在 {REF_AUDIO_PREFIX} 前缀内"
     text = payload.get("text")
     if text is not None and len(str(text)) > MAX_TEXT_CHARS:
@@ -587,9 +671,12 @@ async def tts_passthrough(request: Request):
             params = [(k, v) for k, v in payload.items() if k != "aux_ref_audio_paths"]
             params += [("aux_ref_audio_paths", v) for v in payload.get("aux_ref_audio_paths", [])]
             return _hold_through_response(await _proxy_to_engine("GET", params=params), hold)
+        body_bytes, too_large = await _read_body_capped(request)
+        if too_large is not None:
+            return _hold_through_response(too_large, hold)
         try:
-            body = await request.json()
-        except (ValueError, json.JSONDecodeError):
+            body = json.loads(body_bytes)
+        except ValueError:
             return _hold_through_response(
                 JSONResponse(status_code=400, content={"message": "请求体不是合法 JSON"}), hold)
         if not isinstance(body, dict):

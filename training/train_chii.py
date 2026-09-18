@@ -10,7 +10,10 @@
 
 用法 (在 GPT-SoVITS 目录下运行, 或任意目录, 脚本会自行定位):
   conda activate GPTSoVits
-  python training/train_chii.py [--skip-preprocess] [--skip-s2] [--skip-s1]
+  python training/train_chii.py [--skip-preprocess] [--skip-s2] [--skip-s1] [--force]
+
+幂等语义: 预处理各步以 .done-{step}.json 标记 (记录输入内容哈希) 判定完成,
+标记与产物齐全才跳过; --force 忽略标记重跑预处理。
 
 注: EXP_NAME 已由 "chi" 改为 "chii" (角色官方罗马字 Chii), 改动后新训练产物写入
 GPT-SoVITS/logs/chii/, 权重文件名为 chii_e*.pth / chii-e*.ckpt;
@@ -18,13 +21,12 @@ GPT-SoVITS/logs/chii/, 权重文件名为 chii_e*.pth / chii-e*.ckpt;
 """
 
 import argparse
+import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
-
-import yaml
+import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Chobits-Chii-TTS/
 GS_ROOT = os.path.join(REPO_ROOT, "GPT-SoVITS")
@@ -98,7 +100,61 @@ def run(script: str, extra_env: dict, desc: str) -> None:
         raise SystemExit(f"[失败] {desc} 退出码 {p.returncode}")
 
 
-def preprocess() -> None:
+# --- 步骤完整性标记 ------------------------------------------------------------
+# 此前以"产物文件存在/目录非空"为准跳过：中断留下的半成品会被静默当成完成，
+# 重训结果不可信。改为每步落 .done-{step}.json（记录输入内容哈希），
+# 标记存在 + 输入哈希一致 + 产物齐全三者同时成立才跳过；输入变更、产物被删、
+# 标记损坏/缺失都会重跑该步。--force 忽略标记重跑全部预处理（跑完仍落标记）。
+
+def _inputs_hash(paths) -> str:
+    """输入文件/目录的内容哈希：文件 hash 内容，目录按 文件名+大小 排序累加。
+    用于 .done.json 标记判断预处理步骤是否对当前输入完整跑完过。"""
+    h = hashlib.sha256()
+    for p in paths:
+        if os.path.isdir(p):
+            h.update(b"dir\0")
+            for name in sorted(os.listdir(p)):
+                fp = os.path.join(p, name)
+                if os.path.isfile(fp):
+                    h.update(f"{name}:{os.path.getsize(fp)}\0".encode("utf-8"))
+        elif os.path.isfile(p):
+            h.update(b"file\0")
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+        else:
+            h.update(f"missing:{p}\0".encode("utf-8"))
+    return h.hexdigest()
+
+
+def _marker_path(step: str) -> str:
+    return os.path.join(OPT_DIR, f".done-{step}.json")
+
+
+def _step_done(step: str, inputs, outputs) -> bool:
+    """步骤算完成：标记存在 + 记录的输入哈希与当前一致 + 产物齐全。
+    半成品（有产物无标记/哈希不符）不再被静默跳过。"""
+    try:
+        with open(_marker_path(step), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if data.get("inputs_sha256") != _inputs_hash(inputs):
+        return False
+    return all(os.path.exists(p) for p in outputs)
+
+
+def _mark_step_done(step: str, inputs) -> None:
+    os.makedirs(OPT_DIR, exist_ok=True)
+    with open(_marker_path(step), "w", encoding="utf-8") as f:
+        json.dump({"step": step, "inputs_sha256": _inputs_hash(inputs),
+                   "finished_at": time.strftime("%Y-%m-%d %H:%M:%S")},
+                  f, ensure_ascii=False, indent=2)
+
+
+def preprocess(force: bool = False, runner=run) -> None:
+    # 预处理各步输入一致：标注列表 + wav 目录（语义 token 步另含 s2G 权重与配置）
+    wav_inputs = [LIST_PATH, WAV_DIR]
     common = {
         "inp_text": LIST_PATH,
         "inp_wav_dir": WAV_DIR,
@@ -106,42 +162,50 @@ def preprocess() -> None:
         "opt_dir": OPT_DIR,
     }
     name2text = os.path.join(OPT_DIR, "2-name2text.txt")
-    if os.path.exists(name2text):
-        print("[跳过] 1/6 文本 -> 音素 (已存在)")
+    if not force and _step_done("1-text", wav_inputs, [name2text]):
+        print("[跳过] 1/6 文本 -> 音素 (已完成)")
     else:
-        run(
+        runner(
             "GPT_SoVITS/prepare_datasets/1-get-text.py",
             {**common, "bert_pretrained_dir": PRETRAINED["bert"]},
             "1/6 文本 -> 音素",
         )
-        # 单进程结果合并 (webui 中多 GPU 分片后的合并逻辑)
-        shutil.move(os.path.join(OPT_DIR, "2-name2text-0.txt"), name2text)
+        # 单进程结果合并 (webui 中多 GPU 分片后的合并逻辑); os.replace 原子覆盖,
+        # 重跑 (force/标记失效) 时旧文件不碍事 (shutil.move 对已存在 dst 会失败)
+        os.replace(os.path.join(OPT_DIR, "2-name2text-0.txt"), name2text)
+        _mark_step_done("1-text", wav_inputs)
 
     hubert_dir = os.path.join(OPT_DIR, "4-cnhubert")
-    if os.path.isdir(hubert_dir) and len(os.listdir(hubert_dir)) > 0:
-        print("[跳过] 2/6 HuBERT SSL 特征 (已存在)")
+    if not force and _step_done("2-hubert", wav_inputs, [hubert_dir]):
+        print("[跳过] 2/6 HuBERT SSL 特征 (已完成)")
     else:
-        run(
+        runner(
             "GPT_SoVITS/prepare_datasets/2-get-hubert-wav32k.py",
             {**common, "cnhubert_base_dir": PRETRAINED["hubert"]},
             "2/6 HuBERT SSL 特征",
         )
+        _mark_step_done("2-hubert", wav_inputs)
 
     sv_dir = os.path.join(OPT_DIR, "7-sv_cn")
-    if os.path.isdir(sv_dir) and len(os.listdir(sv_dir)) > 0:
-        print("[跳过] 3/6 说话人嵌入 (已存在)")
+    if not force and _step_done("3-sv", wav_inputs, [sv_dir]):
+        print("[跳过] 3/6 说话人嵌入 (已完成)")
     else:
-        run(
+        runner(
             "GPT_SoVITS/prepare_datasets/2-get-sv.py",
             {**common, "cnhubert_base_dir": PRETRAINED["hubert"], "sv_path": PRETRAINED["sv"]},
             "3/6 说话人嵌入 (v2Pro)",
         )
+        _mark_step_done("3-sv", wav_inputs)
 
     semantic_tsv = os.path.join(OPT_DIR, "6-name2semantic.tsv")
-    if os.path.exists(semantic_tsv):
-        print("[跳过] 4/6 语义 token (已存在)")
+    semantic_inputs = wav_inputs + [
+        os.path.join(GS_ROOT, PRETRAINED["s2G"]),
+        os.path.join(GS_ROOT, PRETRAINED["s2config"]),
+    ]
+    if not force and _step_done("4-semantic", semantic_inputs, [semantic_tsv]):
+        print("[跳过] 4/6 语义 token (已完成)")
     else:
-        run(
+        runner(
             "GPT_SoVITS/prepare_datasets/3-get-semantic.py",
             {
                 "inp_text": LIST_PATH,
@@ -157,6 +221,7 @@ def preprocess() -> None:
         with open(semantic_tsv, "w", encoding="utf-8") as f:
             f.write("item_name\tsemantic_audio\n" + body + "\n")
         os.remove(os.path.join(OPT_DIR, "6-name2semantic-0.tsv"))
+        _mark_step_done("4-semantic", semantic_inputs)
 
 
 def train_s2() -> None:
@@ -198,6 +263,8 @@ def train_s2() -> None:
 
 
 def train_s1() -> None:
+    # 懒加载: 门面测试 venv 不装 pyyaml, 仅训练步骤需要（conda 环境已装）
+    import yaml
     with open(os.path.join(GS_ROOT, "GPT_SoVITS/configs/s1longer-v2.yaml"), encoding="utf-8") as f:
         cfg = yaml.load(f, Loader=yaml.FullLoader)
     cfg["train"].update(
@@ -237,6 +304,8 @@ def main() -> None:
     ap.add_argument("--skip-preprocess", action="store_true")
     ap.add_argument("--skip-s2", action="store_true")
     ap.add_argument("--skip-s1", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="忽略 .done 完成标记, 重跑全部预处理步骤 (训练步本就无跳过)")
     args = ap.parse_args()
 
     for k, v in PRETRAINED.items():
@@ -245,7 +314,7 @@ def main() -> None:
             raise SystemExit(f"预训练文件缺失: {p}")
 
     if not args.skip_preprocess:
-        preprocess()
+        preprocess(force=args.force)
     if not args.skip_s2:
         train_s2()
     if not args.skip_s1:

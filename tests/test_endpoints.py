@@ -249,3 +249,81 @@ def test_speech_validation_errors(client, fake_engine):
                        json={"input": "hi", "voice": "chii", "speed": 9.0},
                        headers=AUTH).status_code == 400
     assert fake_engine.requests == []  # 校验失败不触引擎
+
+
+# --- 请求体大小上限（413, 超限不触引擎） ----------------------------------------
+
+def test_speech_body_too_large_413(client, fake_engine, monkeypatch):
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 64)
+    resp = client.post("/v1/audio/speech",
+                       json={"input": "a" * 100, "voice": "chii"}, headers=AUTH)
+    assert resp.status_code == 413
+    # OpenAI 错误协议 + 稳定 code
+    assert resp.json()["error"]["code"] == "payload_too_large"
+    assert fake_engine.requests == []  # 超限在转发前拦截
+
+
+def test_tts_post_body_too_large_413(client, fake_engine, monkeypatch):
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 64)
+    resp = client.post("/tts", json={"text": "a" * 100}, headers=AUTH)
+    assert resp.status_code == 413
+    assert resp.json()["code"] == "payload_too_large"
+    assert fake_engine.requests == []
+
+
+def test_speech_chunked_body_too_large_413(client, fake_engine, monkeypatch):
+    # 无 Content-Length (chunked) 路径: 按流累计兜底, 同样 413
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 64)
+
+    def gen():
+        yield b'{"input": "' + b"a" * 100 + b'"}'
+
+    resp = client.post("/v1/audio/speech", content=gen(),
+                       headers={**AUTH, "Content-Type": "application/json"})
+    assert resp.status_code == 413
+    assert resp.json()["error"]["code"] == "payload_too_large"
+    assert fake_engine.requests == []
+
+
+def test_speech_body_under_limit_unaffected(client, fake_engine, monkeypatch):
+    # 上限内的正常请求不受影响 (此处 cap 远大于请求体)
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 1024)
+    resp = client.post("/v1/audio/speech",
+                       json={"input": "テストです", "voice": "chii",
+                             "response_format": "aac"}, headers=AUTH)
+    assert resp.status_code == 200
+    assert len(fake_engine.requests) == 1
+
+
+# --- ref_audio 路径穿越（端点级） ------------------------------------------------
+
+def test_tts_get_ref_audio_traversal_400(client, fake_engine):
+    # 回归: /data/../../etc/passwd 曾可通过 startswith("/data/") 前缀检查
+    resp = client.get("/tts", params={"text": "hi",
+                                      "ref_audio_path": "/data/../../etc/passwd"},
+                      headers=AUTH)
+    assert resp.status_code == 400
+    assert "ref_audio" in resp.json()["message"]
+    assert fake_engine.requests == []
+
+
+def test_tts_get_ref_audio_aux_traversal_400(client, fake_engine):
+    resp = client.get("/tts",
+                      params=[("text", "hi"), ("aux_ref_audio_paths", "/data/../x.wav")],
+                      headers=AUTH)
+    assert resp.status_code == 400
+    assert fake_engine.requests == []
+
+
+# --- /healthz/deep 的 ref_ready 字段（降质不体现在状态码） -----------------------
+
+def test_healthz_deep_has_ref_ready_field(client, fake_engine, monkeypatch):
+    monkeypatch.setattr(server, "REF_READY", True)
+    resp = client.get("/healthz/deep", headers=AUTH)
+    assert resp.status_code == 200  # 假引擎合成成功
+    assert resp.json()["ref_ready"] is True
+    # ref_ready 不进状态码: 引擎健康但参考文本缺失仍是 200 (降质非变砖, 不惊动监控)
+    monkeypatch.setattr(server, "REF_READY", False)
+    resp = client.get("/healthz/deep", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["ref_ready"] is False

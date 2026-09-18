@@ -139,8 +139,9 @@ conda activate GPTSoVits
 git clone https://github.com/Anime2Real/GPT-SoVITS.git
 cd GPT-SoVITS && git checkout fix-nonstream-threadpool
 
-# 一键安装 (依赖 + 预训练模型, 模型走 ModelScope 源; 非 TTY 环境需 TERM=xterm)
-TERM=xterm bash install.sh --device CU128 --source ModelScope
+# 一键安装 (依赖 + 预训练模型, 模型走 ModelScope 源; 非 TTY 环境需 TERM=xterm,
+# WORKFLOW=true 跳过上游交互确认 —— 与 tools/setup_env.sh 保持一致)
+TERM=xterm WORKFLOW=true bash install.sh --device CU128 --source ModelScope
 ```
 
 > 也可以直接 `bash tools/setup_env.sh` 自动完成本步全部内容（Miniconda、conda 环境、
@@ -272,6 +273,8 @@ curl -G http://127.0.0.1:9880/tts \
 
 其他环境变量：`CHII_TTS_BIND`（门面监听地址，默认 `127.0.0.1`；不经 Caddy 直接对外须配下方 SSL env，否则非回环绑定拒绝启动）；
 `CHII_TTS_RATE_LIMIT`（`/tts` 与 `/v1/audio/speech` 每 IP 每分钟限流次数，默认 60，0 关闭）；
+`CHII_TTS_MAX_BODY_BYTES`（`/tts` POST 与 `/v1/audio/speech` 请求体大小上限，默认 25MB，
+超限 413；uvicorn/Caddy 无默认 cap，不设防时超大 JSON 会吃内存）；
 `CHII_TTS_ENGINE_URL`（引擎地址，默认 `http://127.0.0.1:9882`）；
 `CHII_TTS_SSL_CERTFILE` / `CHII_TTS_SSL_KEYFILE`（同时设置时以 HTTPS 启动）；
 `CHII_TTS_REF_AUDIO` / `CHII_TTS_REF_TEXT_FILE`（覆盖 OpenAI 垫片 `chii` 音色的参考音频/参考文本路径，
@@ -281,7 +284,9 @@ curl -G http://127.0.0.1:9880/tts \
 健康检查：`GET /healthz` 为免鉴权浅探活（进程级，不触引擎、不暴露指纹）；`GET /healthz/deep` 为深度检查——用极短文本向引擎
 发一次真实合成（能发现引擎"返回 200 空流"的变砖状态），引擎健康返回 200 `{"status":"ok",...}`，
 异常返回 503 `{"status":"degraded",...}`；结果按 `CHII_TTS_DEEP_PROBE_TTL` 缓存避免高频探测烧 GPU。
-`/healthz/deep` 与其他端点一样须带 API key。
+`/healthz/deep` 与其他端点一样须带 API key。响应体另带 `ref_ready` 字段：启动时参考文本
+（`CHII_TTS_REF_TEXT_FILE`）可读且非空为 `true`；为 `false` 时 OpenAI 垫片退化为零样本提示、
+合成质量降质但引擎仍健康（状态码不变，启动时门面已打 WARN 日志），运维应据此告警。
 
 Caddy 架构（2026-09-12 起，见 [docs/deployment.md](docs/deployment.md)）下门面绑回环、公网只放行 TCP 443，
 安全组**不需要**放行 9880/9882（9882 只绑回环）；对外提供服务须遵守 [CC BY-NC-SA 4.0](#-许可协议)（非商业）。
