@@ -324,21 +324,25 @@ def _stream_wav_header(rate: int, channels: int, sampwidth: int = 2) -> bytes:
             + b"data" + struct.pack("<I", 0xFFFFFFFF))
 
 
-def _gain_pcm(pcm: bytes, target_peak: int = 28000, max_gain: float = 8.0) -> bytes:
-    """逐句响度归一: 峰值提至 ~85% 满幅, 增益上限防近静音段噪声被放大。
-    引擎参考音频近静音时整句输出峰值常仅 ~8%（真机 54% 音量不可闻，实证），
-    垫片侧整包归一覆盖不了流式响应，故门面流式模式逐句归一。
-    纯 Python (array) 实现: 门面宿主 Python >= 3.13 无 audioop/numpy。
-    单句 1-4s (3-13 万采样点), 峰值扫描 + 增益约 50-150ms, 相对秒级合成可忽略."""
+def _gain_pcm(pcm: bytes, target_rms: int = 5200, peak_cap: int = 31000, max_gain: float = 8.0) -> bytes:
+    """逐句响度归一（RMS 目标 ~-16dBFS，峰值封顶 ~95% 满幅防削波）。
+    听感响度跟随 RMS 而非瞬时峰值：峰值归一后手机扬声器仍偏轻（真机实证），
+    引擎参考音频近静音、合成波形动态范围偏大，按 RMS 提增益才有听感差异。
+    增益上限防近静音段噪声被放大；g<=1 不动（避免压 Already-响的句）。
+    纯 Python (array) 实现: 门面宿主 Python >= 3.13 无 audioop/numpy，
+    单句 3-13 万采样点，扫描+增益约 80-200ms，相对秒级合成可忽略."""
     pcm = pcm[: len(pcm) // 2 * 2]
     if len(pcm) < 2:
         return pcm
     a = array.array("h")
     a.frombytes(pcm)
     peak = max(map(abs, a))
-    if peak == 0 or peak >= target_peak:
+    if peak == 0:
         return pcm
-    g = min(max_gain, target_peak / peak)
+    rms = (sum(s * s for s in a) / len(a)) ** 0.5
+    g = min(max_gain, target_rms / rms, peak_cap / peak)
+    if g <= 1.0:
+        return pcm
     out = array.array("h", (max(-32768, min(32767, int(round(s * g)))) for s in a))
     return out.tobytes()
 
