@@ -69,6 +69,8 @@ from __future__ import annotations  # 宿主机 Python 3.8 (Ubuntu 20.04) 兼容
 
 import asyncio
 import json
+import array
+import struct
 import os
 import posixpath
 import re
@@ -297,6 +299,86 @@ def _strip_wav_header(head: bytes) -> bytes:
     idx = head[:_WAV_HEADER_SCAN].find(b"data")
     cut = idx + 8 if idx >= 0 else 44
     return head[cut:] if cut < len(head) else b""
+
+
+def _parse_wav_fmt(head: bytes):
+    """从 WAV 头前 _WAV_HEADER_SCAN 字节解析 (rate, channels); 找不到返回 None."""
+    idx = head[:_WAV_HEADER_SCAN].find(b"fmt ")
+    if idx < 0 or len(head) < idx + 16:
+        return None
+    try:
+        channels, rate = struct.unpack_from("<HI", head, idx + 10)
+        return rate, channels
+    except struct.error:
+        return None
+
+
+def _stream_wav_header(rate: int, channels: int, sampwidth: int = 2) -> bytes:
+    """流式 WAV 头: RIFF/data 长度置 0xFFFFFFFF（ indefinit 约定），
+    供流式客户端取 fmt；严格按头解析整包长度的客户端不应收到本模式."""
+    byte_rate = rate * channels * sampwidth
+    block_align = channels * sampwidth
+    return (b"RIFF" + struct.pack("<I", 0xFFFFFFFF) + b"WAVE"
+            + b"fmt " + struct.pack("<IHHIIHH", 16, 1, channels, rate,
+                                    byte_rate, block_align, sampwidth * 8)
+            + b"data" + struct.pack("<I", 0xFFFFFFFF))
+
+
+def _gain_pcm(pcm: bytes, target_peak: int = 28000, max_gain: float = 8.0) -> bytes:
+    """逐句响度归一: 峰值提至 ~85% 满幅, 增益上限防近静音段噪声被放大。
+    引擎参考音频近静音时整句输出峰值常仅 ~8%（真机 54% 音量不可闻，实证），
+    垫片侧整包归一覆盖不了流式响应，故门面流式模式逐句归一。
+    纯 Python (array) 实现: 门面宿主 Python >= 3.13 无 audioop/numpy。
+    单句 1-4s (3-13 万采样点), 峰值扫描 + 增益约 50-150ms, 相对秒级合成可忽略."""
+    pcm = pcm[: len(pcm) // 2 * 2]
+    if len(pcm) < 2:
+        return pcm
+    a = array.array("h")
+    a.frombytes(pcm)
+    peak = max(map(abs, a))
+    if peak == 0 or peak >= target_peak:
+        return pcm
+    g = min(max_gain, target_peak / peak)
+    out = array.array("h", (max(-32768, min(32767, int(round(s * g)))) for s in a))
+    return out.tobytes()
+
+
+async def _merged_wav_stream_normalized(first_state, sentences: list, payload: dict):
+    """流式归一模式 (?stream=1): 与 _merged_wav_stream 相同的逐句串行合并,
+    但每句整句缓冲后按峰值归一再下发, 首句剥掉引擎占位头、换发自带
+    fmt 的流式头 (RIFF/data = 0xFFFFFFFF)。句间仍保持流式——前句播放时
+    后句在合成, 长回复首声延迟从整包合成完成降到首句合成完成 (~1-2s).
+    归一以句为单位: 句间响度一致性优于整包单次归一, 代价是句内逐块延迟
+    让位于整句缓冲 (单句 1-4s, 可接受)."""
+    header_sent = False
+    for i, sentence in enumerate(sentences):
+        try:
+            if i == 0:
+                upstream, it, head = first_state
+            else:
+                upstream, it, head = await _engine_stream_first(dict(payload, text=sentence))
+        except _EngineEmptyStream:
+            continue
+        try:
+            while len(head) < _WAV_HEADER_SCAN and b"data" not in head:
+                try:
+                    head += await it.__anext__()
+                except StopAsyncIteration:
+                    break
+            if i == 0:
+                fmt = _parse_wav_fmt(head) or (32000, 1)
+                yield _stream_wav_header(*fmt)
+                header_sent = True
+            buf = bytearray(_strip_wav_header(head))
+            async for chunk in it:
+                buf += chunk
+            gained = _gain_pcm(bytes(buf))
+            if gained:
+                yield gained
+        finally:
+            await upstream.aclose()
+    if not header_sent:
+        return
 
 
 async def _merged_wav_stream(first_state, sentences: list[str], payload: dict):
@@ -528,8 +610,11 @@ async def openai_audio_speech(request: Request):
         headers = {}
         if ct := first_state[0].headers.get("content-type"):
             headers["content-type"] = ct
+        merged = (_merged_wav_stream_normalized(first_state, sentences, payload)
+                  if request.query_params.get("stream") == "1"
+                  else _merged_wav_stream(first_state, sentences, payload))
         return _hold_through_response(StreamingResponse(
-            _merged_wav_stream(first_state, sentences, payload), status_code=200, headers=headers), hold)
+            merged, status_code=200, headers=headers), hold)
     except Exception:
         hold.release()
         raise
