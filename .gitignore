@@ -7,3 +7,6 @@ models/
 outputs/
 __pycache__/
 .venv/
+
+# 本地虚拟环境备份（勿入库）
+.venv.bak-*/
