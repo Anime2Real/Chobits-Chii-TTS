@@ -236,7 +236,7 @@ export CHII_TTS_API_KEY=<随机密钥>   # 必填, 未设置会拒绝启动
 bash tools/start_tts_api.sh 9880
 ```
 
-> 门面依赖兄弟仓库的共享库 [chii-facade-common](https://github.com/Anime2Real/Chobits-Chii-CloudDeploy/tree/main/tools/chii-facade-common)（鉴权/限流/env 解析等两门面公共逻辑的唯一真相源）。`start_tts_api.sh` 首次建 venv 时自动从同级目录 `../Chobits-Chii-CloudDeploy/tools/chii-facade-common` 以 editable 方式安装；单仓库 clone 需先同级 clone CloudDeploy 仓库，或手动 `pip install -e ../Chobits-Chii-CloudDeploy/tools/chii-facade-common`。改动共享库后须重启门面生效。
+> 门面依赖兄弟仓库的共享库 [chii-facade-common](https://github.com/Anime2Real/Chobits-Chii-ServerDeploy/tree/main/tools/chii-facade-common)（鉴权/限流/env 解析等两门面公共逻辑的唯一真相源）。`start_tts_api.sh` 首次建 venv 时自动从同级目录 `../Chobits-Chii-ServerDeploy/tools/chii-facade-common` 以 editable 方式安装（兼容旧目录名）；单仓库 clone 需先同级 clone ServerDeploy 仓库，或手动 `pip install -e ../Chobits-Chii-ServerDeploy/tools/chii-facade-common`。改动共享库后须重启门面生效。
 
 生产环境用 systemd 守护门面（密钥经 `EnvironmentFile` 注入）+ docker `--restart` 守护引擎；
 TLS 由 Caddy 在 443 终结（门面绑回环），unit / env 示例与验证步骤见 **[docs/deployment.md](docs/deployment.md)**。
