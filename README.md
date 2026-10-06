@@ -147,6 +147,13 @@ TERM=xterm WORKFLOW=true bash install.sh --device CU128 --source ModelScope
 > 也可以直接 `bash tools/setup_env.sh` 自动完成本步全部内容（Miniconda、conda 环境、
 > 克隆、install.sh 及下方全部修复），幂等可重复执行。
 
+> **两个 GPT-SoVITS clone 的定位**：本仓库内嵌的 `GPT-SoVITS/` 是训练/推理用 clone
+> （不入库，预训练模型与训练产物都在里面），remote 应指向本项目 fork
+> （`git@github.com:Anime2Real/GPT-SoVITS.git`）并检出 `fix-nonstream-threadpool`
+> （49587af，与 `docker/Dockerfile` 的 `GS_REPO_REF` 一致）；工作区根目录
+> （`../GPT-SoVITS`）的独立 clone 是 fork 开发用（改修复、向上游提 PR 走那边）。
+> 早期内嵌 clone 的 remote 曾指向上游 RVC-Boss 经 ghfast.top 代理，2026-10 已统一修正为 fork。
+
 install.sh 完成后，**按顺序**执行以下修复（2026-08 时点的上游版本兼容问题，已全部内置于 `tools/setup_env.sh`）：
 
 ```bash
@@ -172,6 +179,7 @@ python -m nltk.downloader punkt_tab || \
 > torch cuXXX 系列可用上海交大镜像
 > `pip install torch torchcodec --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu128`
 > （阿里云与清华均已下线 pytorch-wheels 镜像）。
+> 各仓库用到的国内镜像/加速源汇总见 [docs/mirrors.md](docs/mirrors.md)。
 
 ### 3. 数据清洗
 
@@ -236,7 +244,7 @@ export CHII_TTS_API_KEY=<随机密钥>   # 必填, 未设置会拒绝启动
 bash tools/start_tts_api.sh 9880
 ```
 
-> 门面依赖兄弟仓库的共享库 [chii-facade-common](https://github.com/Anime2Real/Chobits-Chii-ServerDeploy/tree/main/tools/chii-facade-common)（鉴权/限流/env 解析等两门面公共逻辑的唯一真相源）。`start_tts_api.sh` 首次建 venv 时自动从同级目录 `../Chobits-Chii-ServerDeploy/tools/chii-facade-common` 以 editable 方式安装（兼容旧目录名）；单仓库 clone 需先同级 clone ServerDeploy 仓库，或手动 `pip install -e ../Chobits-Chii-ServerDeploy/tools/chii-facade-common`。改动共享库后须重启门面生效。
+> 门面依赖兄弟仓库的共享库 [chii-facade-common](https://github.com/Anime2Real/Chobits-Chii-ServerDeploy/tree/cloud/tools/chii-facade-common)（鉴权/限流/env 解析等两门面公共逻辑的唯一真相源）。`start_tts_api.sh` 首次建 venv 时自动从同级目录 `../Chobits-Chii-ServerDeploy/tools/chii-facade-common` 以 editable 方式安装（兼容旧目录名）；单仓库 clone 需先同级 clone ServerDeploy 仓库**并检出 `cloud` 分支**——其 `main` 仅作分支索引、无 `tools/` 目录（`git clone -b cloud git@github.com:Anime2Real/Chobits-Chii-ServerDeploy.git ../Chobits-Chii-ServerDeploy`），或手动 `pip install -e ../Chobits-Chii-ServerDeploy/tools/chii-facade-common`。启动脚本已带前置检查：共享库缺失时打印上述指引并非零退出。改动共享库后须重启门面生效。
 
 生产环境用 systemd 守护门面（密钥经 `EnvironmentFile` 注入）+ docker `--restart` 守护引擎；
 TLS 由 Caddy 在 443 终结（门面绑回环），unit / env 示例与验证步骤见 **[docs/deployment.md](docs/deployment.md)**。
