@@ -1,4 +1,7 @@
 GPT-SoVITS/
+# CosyVoice 调研验证 (cosy-voice 分支): 框架 clone 与权重, 不入库
+CosyVoice/
+pretrained_models/
 data/wavs/
 # 含本机绝对路径, 由 tools/clean_dataset.py 重新生成
 data/gpt_sovits.list

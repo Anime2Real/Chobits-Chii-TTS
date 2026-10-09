@@ -1,10 +1,10 @@
 # CosyVoice 引入可行性调研
 
 > 调研日期：2026-10-09 · 分支：`cosy-voice`
-> 结论先行：**技术上可引入，许无障碍（Apache-2.0 全栈），zero-shot 克隆可作为零风险基线；
-> 但对本项目"日语 + 21 分钟单人数据 + RTX 4060 Laptop 8GB"的场景，CosyVoice 并非明显优于
-> 现有 GPT-SoVITS v2Pro 方案**——日语前端有已知 bug、微调数据量低于官方建议下限、8GB 显存
-> 余量更小。建议按本文末尾的分阶段路线先实测 zero-shot 效果再决策。
+> 结论先行：**技术上可引入，许可无障碍（Apache-2.0 全栈）；zero-shot 克隆基线已在本机
+> RTX 4090 上实测跑通（RTF 0.32 / 流式首包 1.05s / 峰值显存增量 5.7GB，见第 9 节），
+> 日语假名化补丁验证为必需（不打补丁直接崩溃）**。
+> 是否切换需人工 AB 试听 zero-shot 与现有 GPT-SoVITS v2Pro e10 输出后决策。
 
 ## 1. 框架概览
 
@@ -102,11 +102,79 @@ vLLM（官方支持 ≥0.11.0 V1）第三方报告首 token 800ms→150ms（未�
 
 引入 CosyVoice **可行且有明确收益点**（Apache-2.0 全栈、原生流式、免训练 zero-shot、官方指标第一梯队），但**不构成对现有方案的全面替代**：日语前端需打补丁、微调数据与显存条件都不如现有路线宽松。建议分阶段验证，每阶段有明确去/留判据：
 
-1. **Zero-shot 基线实测（1–2 天，本机可做）**：conda 环境装 CosyVoice + Fun-CosyVoice3-0.5B-2512（或 CV2-0.5B 省显存），用 `models/ref_audio.wav` 做 zero-shot 克隆，合成 `examples/target_text.txt` 同款文本；先打汉字→假名补丁。判据：与现有 e10 权重输出做 AB 试听；记录本机 RTF / 首包延迟 / 峰值显存（`nvidia-smi`），填补 4060 Laptop 无实测的空白。
+1. ~~**Zero-shot 基线实测（1–2 天，本机可做）**~~：✅ 已完成（2026-10-09，RTX 4090 24GB），见第 9 节。
 2. **若基线音质可接受**：封装为引擎容器（复用门面），对比流式体验；日语自然度若仍不满，横向测 Style-BERT-VITS2。
 3. **若 zero-shot 音色相似度不足**：评估云 GPU（24GB 级）SFT 微调，数据需先扩充或接受过拟合风险；否则维持 GPT-SoVITS v2Pro 微调路线，CosyVoice 仅作流式能力储备。
 
-阶段 1 产出后更新本文档实测章节，再决定是否合入主线。
+## 9. 本机实测（2026-10-09 · RTX 4090 24GB · 驱动 580.159 / CUDA 13.0）
+
+阶段 1 已在本机完成。环境：conda `CosyVoice`（Python 3.10 + torch 2.3.1+cu121），CosyVoice 框架 clone 在
+`CosyVoice/`（不入库），权重 `Fun-CosyVoice3-0.5B-2512` 经 ModelScope 下载至
+`CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B`（约 9.1GB）。验证脚本 `tools/cosyvoice_zeroshot_eval.py`：
+用 `models/ref_audio.wav`（4.2s）+ 假名化参考文本做 zero-shot 克隆，合成 `examples/target_text.txt`
+同款文本，产物在 `outputs/cosyvoice/`（不入库）。
+
+### 9.1 性能实测（fp16，HF transformers 原生推理，未开 TRT/vLLM）
+
+| 指标 | 实测值 | 备注 |
+| --- | --- | --- |
+| 模型加载（热缓存） | ~5s | 冷启动首次约 65s（含 wetext 前端模型下载） |
+| 非流式 RTF | **0.32** | 1.34s 合成 4.20s 音频（warmup 后计时） |
+| 流式首包延迟 | **1052ms** | 首个 chunk 约 1.6s 音频 |
+| 流式整体 RTF | 0.39 | 1.61s 合成 4.12s 音频，共 3 个 chunk |
+| 峰值显存（torch 分配） | **4.97GB** | `torch.cuda.max_memory_allocated` |
+| 峰值显存（nvidia-smi 整卡） | 8.39GB | 含桌面环境常驻 ~2.7GB，本进程增量约 5.7GB |
+
+要点：4090 上裸 HF 推理首包约 1s，验证了"官方 150ms 是 TRT-LLM + 高端卡全优化下界"的判断；
+RTF 0.32–0.39 意味着短句合成亚秒级出整句，整卡峰值显存增量 5.7GB——**4060 Laptop 8GB 跑
+CV3-0.5B fp16 流式预计可行但贴顶**（桌面占用约 0.5–1GB 时余量不足 1GB，需实测确认）。
+
+### 9.2 日语前端 bug 实测确认
+
+- 假名化（pyopenjtalk NJD → 空格分隔片假名，助词は→ワ按发音处理）后合成正常：
+  whisper-small 回译 zero-shot 输出为「チー、秘敵のこと、大好き、ずっと一緒にいる」，与目标文本
+  「ちぃ、秀樹のこと、大好き。ずっと一緒にいる。」一致（「秘敵」系 ASR 同音误转，真人音频
+  `ref_audio.wav` 亦被转作「井的」），可懂度合格。pyopenjtalk 的 `pron` 字段可能混入
+  U+2019 撇号（如 ダイス’キ），脚本已做剔除。
+- **不打补丁的 raw 模式直接崩溃**：含汉字文本被路由到中文前端后产出退化 token 序列，
+  hifigan F0 predictor 卷积报 `Kernel size can't be greater than actual input size`。
+  即日语场景下假名化补丁不是优化而是**必需**。
+
+### 9.3 与现有方案的初步对照（待人工试听确认）
+
+| | GPT-SoVITS v2Pro e10（现有） | Fun-CosyVoice3-0.5B zero-shot |
+| --- | --- | --- |
+| 训练成本 | 已微调（21min 数据 + 本机训练） | **零训练**（4.2s 参考音频） |
+| 采样率 | 32kHz | 24kHz |
+| whisper-small 回译 | チン、イデキのこと大好き。ずっと一緒にいる。 | チー、秘敵のこと、大好き、ずっと一緒にいる |
+| 流式 | 门面按句伪流式 | 原生 token 级流式，首包 1.05s（裸跑） |
+
+ASR 回译仅供参考（短句 + whisper-small 误差大），**音色相似度与自然度需人工 AB 试听**：
+`outputs/inference/run1/output.wav`（现有）vs `outputs/cosyvoice/zero_shot.wav` / `zero_shot_stream.wav`。
+
+### 9.4 复现步骤（本机）
+
+```bash
+# 环境 (conda env 已建好, 名为 CosyVoice; torch 走 SJTU 镜像, 其余走清华镜像)
+conda create -n CosyVoice -c conda-forge --override-channels python=3.10 pip -y
+conda activate CosyVoice
+pip install torch==2.3.1 torchaudio==2.3.1 --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu121
+pip install -r CosyVoice/requirements.txt pyopenjtalk==0.4.1 -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 注意: requirements 中的 deepspeed/tensorrt-cu12* 推理不需要, 本次安装已剔除;
+# openai-whisper==20231117 为 sdist, 需先 pip install 'setuptools<81' wheel 并用 --no-build-isolation 安装;
+# pyopenjtalk 需解包 open_jtalk 词典 (来源同 docker/Dockerfile: ModelScope XXXXRT/GPT-SoVITS-Pretrained)
+
+# 权重 (ModelScope)
+python -c "from modelscope import snapshot_download; \
+  snapshot_download('FunAudioLLM/Fun-CosyVoice3-0.5B-2512', \
+                    local_dir='CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B')"
+
+# 验证 (假名化; 加 --raw 可复现汉字 bug 崩溃)
+python tools/cosyvoice_zeroshot_eval.py \
+  --model_dir CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B \
+  --ref_audio models/ref_audio.wav --ref_text models/ref_text.txt \
+  --target_text examples/target_text.txt --out_dir outputs/cosyvoice
+```
 
 ## 主要来源
 
