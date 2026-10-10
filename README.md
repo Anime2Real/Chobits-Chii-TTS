@@ -13,8 +13,8 @@
 
 > 💖 如果这个项目对你有帮助，欢迎在 [GitHub](https://github.com/Anime2Real/Chobits-Chii-TTS) 点个 Star —— 你的支持能让更多人发现小叽！
 
-> 🌿 本分支（`cosy-voice`）是 **CosyVoice3 方案**。仓库 `main` 分支为[分支索引](https://github.com/Anime2Real/Chobits-Chii-TTS)；
-> GPT-SoVITS 生产方案见 [`gpt-sovits`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/gpt-sovits) 分支。
+> 🌿 本分支（`cosy-voice`）是 **CosyVoice3 方案**（验证通过，待上线）。仓库 `main` 分支为[分支索引](https://github.com/Anime2Real/Chobits-Chii-TTS)；
+> GPT-SoVITS 生产方案（当前线上服务）见 [`gpt-sovits`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/gpt-sovits) 分支。
 
 > ✅ CosyVoice 方案已验证通过：zero-shot 基线与 21 分钟数据 SFT 微调均在 RTX 4090 实测跑通，
 > 人工试听选定 **SFT 微调版**为正式路线；引擎容器与门面端到端联调完成。
@@ -28,12 +28,26 @@
 
 > ⚠️ 注意：原始动画音频的版权归其权利方所有。本项目仅供学习与研究使用，请勿用于商业用途。
 
+## 🎧 示例试听
+
+SFT 权重暂未发布（仅本地），示例音频需本地生成（见[快速开始](#-快速开始从零复现)第 5 步）：
+
+```bash
+python tools/cosyvoice_zeroshot_eval.py \
+  --model_dir CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B-chii-sft \
+  --ref_audio models/ref_audio.wav --ref_text models/ref_text.txt \
+  --target_text examples/target_text.txt --out_dir outputs/cosyvoice_sft
+```
+
+合成文本（`examples/target_text.txt`）：`ちぃ、秀樹のこと、大好き。ずっと一緒にいる。`
+（Fun-CosyVoice3-0.5B chii SFT · zero-shot 模式合成，输出 24kHz `outputs/cosyvoice_sft/zero_shot.wav`）
+
 ## 📊 数据
 
 训练数据与 `gpt-sovits` 分支相同：[Chobits-Chii-Voice](https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice)
 （487 条 / 约 21.4 分钟日语，22050Hz 单声道），经 `tools/clean_dataset.py` 清洗后为 483 条。
 CosyVoice 侧的特殊处理：**日语文本全部假名化**（pyopenjtalk NJD → 空格分隔片假名），
-原因见下方"日语文本前端"。
+原因见下方"方案要点"。
 
 ## 🔑 方案要点
 
@@ -57,7 +71,19 @@ CosyVoice 侧的特殊处理：**日语文本全部假名化**（pyopenjtalk NJD
 SFT 版发音正确性更好（人名「秀樹」说清），人工试听音色亦优于基线。官方宣称的 150ms 首包是
 TensorRT-LLM + 高端卡全优化下界；裸 HF 推理约 1s，部署机可再开 TRT-LLM 压缩。
 
-## 🗂 仓库结构（本分支独有部分）
+## 📦 模型文件
+
+SFT 微调权重暂未发布（仅本地）。自行训练见下方快速开始；推理所需的全部文件：
+
+| 文件 | 说明 |
+| --- | --- |
+| `llm.pt` / `flow.pt` | SFT 微调后的语义/声学模型（val_best 平均，各约 2.0GB/1.3GB） |
+| 基座其余文件 | `speech_tokenizer_v3.onnx`、`campplus.onnx`、`hift.pt`、`CosyVoice-BlankEN/` 等，来自 ModelScope `FunAudioLLM/Fun-CosyVoice3-0.5B-2512` |
+| `models/ref_audio.wav` | 参考音频（ep07「秀樹は地位を拾ってくれた」，4.2s，zero-shot 推理仍需要） |
+
+## 🗂 仓库结构
+
+本分支独有的部分（门面 `tools/server.py`、`deploy/`、`tests/` 等与 `gpt-sovits` 分支共享，零改动复用）：
 
 ```
 Chobits-Chii-TTS/
@@ -76,18 +102,8 @@ Chobits-Chii-TTS/
 ├── CosyVoice/                      # CosyVoice 框架 clone (不入库)
 │   └── pretrained_models/
 │       └── Fun-CosyVoice3-0.5B-chii-sft/  # SFT 微调模型目录 (不入库, 见"模型文件")
-└── (门面 tools/server.py、deploy/、tests/ 等与 gpt-sovits 分支共享, 零改动复用)
+└── (其余同 gpt-sovits 分支)
 ```
-
-## 📦 模型文件
-
-SFT 微调权重暂未发布（仅本地）。自行训练见下方快速开始；推理所需的全部文件：
-
-| 文件 | 说明 |
-| --- | --- |
-| `llm.pt` / `flow.pt` | SFT 微调后的语义/声学模型（val_best 平均，各约 2.0GB/1.3GB） |
-| 基座其余文件 | `speech_tokenizer_v3.onnx`、`campplus.onnx`、`hift.pt`、`CosyVoice-BlankEN/` 等，来自 ModelScope `FunAudioLLM/Fun-CosyVoice3-0.5B-2512` |
-| `models/ref_audio.wav` | 参考音频（ep07「秀樹は地位を拾ってくれた」，4.2s，zero-shot 推理仍需要） |
 
 ## 🚀 快速开始（从零复现）
 
@@ -138,12 +154,7 @@ python training/prepare_cosyvoice_data.py /tmp/chii-voice-hf/wavs
 
 ### 5. 推理验证
 
-```bash
-python tools/cosyvoice_zeroshot_eval.py \
-  --model_dir CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B-chii-sft \
-  --ref_audio models/ref_audio.wav --ref_text models/ref_text.txt \
-  --target_text examples/target_text.txt --out_dir outputs/cosyvoice_sft
-```
+见上方[示例试听](#-示例试听)的命令，产物与性能指标写入 `outputs/cosyvoice_sft/`。
 
 ## 🌐 部署为 HTTP 服务
 
