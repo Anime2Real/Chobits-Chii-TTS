@@ -102,9 +102,9 @@ vLLM（官方支持 ≥0.11.0 V1）第三方报告首 token 800ms→150ms（未�
 
 引入 CosyVoice **可行且有明确收益点**（Apache-2.0 全栈、原生流式、免训练 zero-shot、官方指标第一梯队），但**不构成对现有方案的全面替代**：日语前端需打补丁、微调数据与显存条件都不如现有路线宽松。建议分阶段验证，每阶段有明确去/留判据：
 
-1. ~~**Zero-shot 基线实测（1–2 天，本机可做）**~~：✅ 已完成（2026-10-09，RTX 4090 24GB），见第 9 节。
+1. ~~**Zero-shot 基线实测**~~：✅ 已完成（2026-10-09，RTX 4090 24GB），见 9.1–9.4 节。
 2. **若基线音质可接受**：封装为引擎容器（复用门面），对比流式体验；日语自然度若仍不满，横向测 Style-BERT-VITS2。
-3. **若 zero-shot 音色相似度不足**：评估云 GPU（24GB 级）SFT 微调，数据需先扩充或接受过拟合风险；否则维持 GPT-SoVITS v2Pro 微调路线，CosyVoice 仅作流式能力储备。
+3. ~~**若 zero-shot 音色相似度不足，评估 SFT 微调**~~：✅ 已完成（2026-10-10，本机 4090），见 9.5 节——24GB 可全量 SFT，小数据过拟合快但 val_best 平均有效，发音正确性有改善。
 
 ## 9. 本机实测（2026-10-09 · RTX 4090 24GB · 驱动 580.159 / CUDA 13.0）
 
@@ -175,6 +175,47 @@ python tools/cosyvoice_zeroshot_eval.py \
   --ref_audio models/ref_audio.wav --ref_text models/ref_text.txt \
   --target_text examples/target_text.txt --out_dir outputs/cosyvoice
 ```
+
+### 9.5 SFT 微调实测（2026-10-10 · 同机 4090）
+
+阶段 3 的微调路线也已在本机验证（24GB 显存使本机 SFT 可行）。数据：HF 数据集 483 条全部匹配到 wav，
+文本假名化后按 seed=1986 拆 train 473 / dev 10（准备脚本 `training/prepare_cosyvoice_data.py`），
+按官方 `examples/libritts/cosyvoice3` 流程提取 embedding/speech token 并转 parquet。
+配置 `training/cosyvoice3_chii_sft.yaml`（官方 yaml 副本，改动：max_epoch 200→10、log_interval→10、
+`use_spk_embedding` 按 yaml 注释 SFT 置 True）；lr 1e-5、constantlr、AMP、单卡 torch_ddp。
+
+| | LLM SFT | Flow SFT |
+| --- | --- | --- |
+| 训练 | 10 epoch，每 epoch ~35 step / ~12s，无 OOM | 同左 |
+| train loss | 1.77 → 0.32（acc 0.23→0.80） | ~0.41 → ~0.30 |
+| CV loss | **3.16 → 6.58 单调上升**（10 条超短 dev 上过拟合极快） | 0.53–0.84 震荡，无明显恶化 |
+| 峰值显存 | ~18.5GB | ~14.5GB |
+| val_best 平均（--num 3） | epoch 0/1/2（自动回退到轻适配权重） | epoch 3/6/9 |
+
+**微调版推理对照**（模型目录 `CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B-chii-sft/`，
+同参跑 `tools/cosyvoice_zeroshot_eval.py`，产物 `outputs/cosyvoice_sft/`）：
+
+| 指标 | SFT 版 | zero-shot 基线 |
+| --- | --- | --- |
+| 非流式 RTF | 0.348 | 0.320 |
+| 流式首包 | 1268ms | 1052ms |
+| torch 峰值显存 | 4967MiB | 4969MiB |
+| whisper-small 回译 | **チー、ヒデキなこと、大好き、ずっと一緒にいる。** | チー、秘敵のこと、大好き、ずっと一緒にいる |
+
+性能与基线持平（差异在测量噪声内）；**发音正确性改善**：人名「ヒデキ」（秀樹）说清楚了
+（基线误为「秘敵」），仅「のこと」偏「なこと」一处小偏差。音色相似度仍需人工 AB：
+`outputs/cosyvoice_sft/zero_shot.wav` vs `outputs/cosyvoice/zero_shot.wav`。
+
+**微调注意事项**（复现必读）：
+1. `cosyvoice/bin/train.py` 与 `cosyvoice/utils/train_utils.py` 顶层 import deepspeed（torch_ddp
+   用不到），需最小补丁：两处 import 包 try/except + `deepspeed.add_config_arguments` 加 None 守卫
+   （本次直接改在 gitignored 的 `CosyVoice/` clone 内，未入库）。
+2. 这版 train.py 用严格 `parse_args()`，**不支持** `--train_conf.max_epoch` 形式的 CLI 覆盖，
+   改超参须用配置副本。
+3. `onnxruntime-gpu` 可能被 `~/.local` 的 CPU 版 onnxruntime 遮蔽，speech token 提取自动回退 CPU
+   （21 分钟数据约 20s，无实际影响）。
+4. LLM 在小数据上过拟合极快（epoch 0 后 CV loss 即升），val_best 平均会自动回退；想要更强声线
+   适配可增大 dev 集或人工挑 epoch 3–5 checkpoint 做听测。
 
 ## 主要来源
 
