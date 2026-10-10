@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(COSYVOICE_DIR, 'third_party/Matcha-TTS'))
 import torch
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 MODEL_DIR = os.environ.get('MODEL_DIR', '/data/model')
 ENGINE_PORT = int(os.environ.get('ENGINE_PORT', '9880'))
@@ -191,8 +192,10 @@ async def healthz():
 
 
 @app.get('/tts')
-def tts_get(request: Request):
-    return _handle_tts(dict(request.query_params))
+async def tts_get(request: Request):
+    # 合成是阻塞型 GPU 调用 (整句非流式可达秒级), 一律放线程池执行,
+    # 避免堵事件波导致 /healthz 等并发请求停摆 (GPU 串行由 _gpu_lock 保证)
+    return await run_in_threadpool(_handle_tts, dict(request.query_params))
 
 
 @app.post('/tts')
@@ -203,7 +206,7 @@ async def tts_post(request: Request):
         return _err(400, '请求体不是合法 JSON')
     if not isinstance(body, dict):
         return _err(400, '请求体须为 JSON 对象')
-    return _handle_tts(body)
+    return await run_in_threadpool(_handle_tts, body)
 
 
 if __name__ == '__main__':
