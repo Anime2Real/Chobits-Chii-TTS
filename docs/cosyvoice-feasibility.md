@@ -4,7 +4,9 @@
 > 结论先行：**技术上可引入，许可无障碍（Apache-2.0 全栈）；zero-shot 与 SFT 均已在
 > RTX 4090 上实测跑通（第 9 节），日语假名化补丁验证为必需（不打补丁直接崩溃）**。
 > **选型已定（2026-10-10 人工试听）：采用 SFT 微调版**（`Fun-CosyVoice3-0.5B-chii-sft`），
-> 音色与发音均优于预训练 zero-shot 基线。下一步：封装引擎容器接入现有门面（阶段 2）。
+> 音色与发音均优于预训练 zero-shot 基线。~~下一步：封装引擎容器接入现有门面（阶段 2）~~
+> **阶段 2 已完成（2026-10-10）**：引擎容器封装于 `docker/cosyvoice/`，宿主机契约验证 +
+> 门面端到端 + 镜像构建全部通过，门面 `tools/server.py` 零改动（见第 10 节）。
 
 ## 1. 框架概览
 
@@ -103,7 +105,7 @@ vLLM（官方支持 ≥0.11.0 V1）第三方报告首 token 800ms→150ms（未�
 引入 CosyVoice **可行且有明确收益点**（Apache-2.0 全栈、原生流式、免训练 zero-shot、官方指标第一梯队），但**不构成对现有方案的全面替代**：日语前端需打补丁、微调数据与显存条件都不如现有路线宽松。建议分阶段验证，每阶段有明确去/留判据：
 
 1. ~~**Zero-shot 基线实测**~~：✅ 已完成（2026-10-09，RTX 4090 24GB），见 9.1–9.4 节。
-2. **若基线音质可接受**：封装为引擎容器（复用门面），对比流式体验；日语自然度若仍不满，横向测 Style-BERT-VITS2。
+2. ~~**若基线音质可接受**：封装为引擎容器（复用门面），对比流式体验~~：✅ 已完成（2026-10-10），见第 10 节；日语自然度若仍不满，横向测 Style-BERT-VITS2。
 3. ~~**若 zero-shot 音色相似度不足，评估 SFT 微调**~~：✅ 已完成（2026-10-10，本机 4090），见 9.5 节——24GB 可全量 SFT，小数据过拟合快但 val_best 平均有效，发音正确性有改善。
 
 ## 9. 本机实测（2026-10-09 · RTX 4090 24GB · 驱动 580.159 / CUDA 13.0）
@@ -218,6 +220,84 @@ python tools/cosyvoice_zeroshot_eval.py \
    （21 分钟数据约 20s，无实际影响）。
 4. LLM 在小数据上过拟合极快（epoch 0 后 CV loss 即升），val_best 平均会自动回退；想要更强声线
    适配可增大 dev 集或人工挑 epoch 3–5 checkpoint 做听测。
+
+## 10. 阶段 2：引擎容器封装（2026-10-10 完成）
+
+SFT 模型封装为 Docker 引擎容器，**与 GPT-SoVITS 引擎同一 `/tts` 契约，门面 `tools/server.py`
+一行不改**（`CHII_TTS_ENGINE_URL` 指到新引擎即完成切换）。新增文件（不入库产物除外）：
+
+- `docker/cosyvoice/engine_server.py`：FastAPI 引擎 shim。设计要点：
+  - 日语假名化在引擎内部完成（`text` 与 `prompt_text` 均过 pyopenjtalk NJD → 空格分隔片假名、
+    剔除撇号），`prompt_text` 前加 `You are a helpful assistant.<|endofprompt|>`（与 SFT 训练
+    instruct 序列一致），调 `AutoModel(fp16).inference_zero_shot(..., stream=..., speed=...)`；
+  - `streaming_mode` 为真：首块为含 fmt 的流式 WAV 头（24kHz mono 16bit，RIFF/data 长度
+    `0xFFFFFFFF` 占位，与门面 `_stream_wav_header` 同约定），后续块裸 PCM；首块在返回响应前
+    预读，推理零产出/异常回 5xx，**合法输入绝不返回 200 空流**（门面预读首块判定依赖此语义）；
+  - `media_type`：wav 直接封装；aac/ogg 非流式时用容器内 ffmpeg 7 子进程从裸 PCM 编码
+    （aac→adts、ogg→libopus）；
+  - GPU 推理由全局锁串行化（门面允许 8 路在途，CosyVoice 无批推理接口）；`batch_size/top_k/
+    top_p/temperature/seed/text_lang/prompt_lang` 等白名单参数接受但忽略；坏 `ref_audio_path`
+    回 400；路径白名单在门面侧，shim 不重复设防。
+- `docker/cosyvoice/Dockerfile`：miniforge 基座 + conda py3.10 + ffmpeg 7 + torch 2.3.1+cu121；
+  CosyVoice 源码按 pin SHA `074ca6dc` 浅抓（含 Matcha-TTS 子模块）；requirements 剔除
+  deepspeed/tensorrt-cu12*/gdown/gradio/lightning/tensorboard/fastapi-cli，openai-whisper sdist
+  按 §9.4 同款修复（先 `setuptools<81`+wheel 再 `--no-build-isolation`）；pyopenjtalk==0.4.1 +
+  open_jtalk 词典（MODEL_SOURCE 分支，与 `docker/Dockerfile` 同源）。
+- `docker/cosyvoice/entrypoint.sh`：模型目录完整性检查，缺失时打印挂载指引并非零退出；
+  `MODEL_SOURCE=ms` 且目录可写时自动下载官方预训练基座（**SFT 权重无发布渠道，挂载是必须路径**）；
+  带参数启动时直接 exec（CPU 冒烟/调试入口）。
+
+### 10.1 构建与运行
+
+```bash
+docker build -t chobits-chii-cosyvoice-engine docker/cosyvoice/
+# 国内可加 --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+#          --build-arg TORCH_INDEX_URL=https://mirror.sjtu.edu.cn/pytorch-wheels/cu121
+
+docker run -d --gpus all -p 127.0.0.1:9882:9880 \
+  -v /srv/chii-tts/cosyvoice/model:/data/model \
+  -v /srv/chii-tts/cosyvoice/models:/data/models \
+  chobits-chii-cosyvoice-engine
+# 门面切换: CHII_TTS_ENGINE_URL=http://127.0.0.1:9882 (恰为门面默认值)
+```
+
+### 10.2 验证结果（宿主机 + 构建，详见下文）
+
+- **引擎宿主机直跑**（conda CosyVoice 环境，uvicorn 127.0.0.1:9883，MODEL_DIR 指 SFT 目录）：
+  非流式 wav 200（24kHz/16bit/4.36s）；streaming_mode=2 首块合法 WAV 头（fmt 24kHz，
+  RIFF/data=0xFFFFFFFF），PCM 总长 216960B=4.52s 与非流式一致；ogg 200（ffprobe ogg/1.65s）；
+  GET /tts 与 GET 流式均 200；坏 ref_audio_path → 400、空 text → 400。
+- **门面端到端**（`CHII_TTS_ENGINE_URL=http://127.0.0.1:9883`，门面零改动）：
+  `/healthz/deep` 200（ref_ready=true）；`/v1/audio/speech` 多句 wav 合并流 200 可播放
+  （3 句 5.44s，whisper-small 回译「チー、イデキのこと、大好き、ずっと一緒にいる。今日も元気だよ。」，
+  内容完整）；opus 200（ogg/3.13s）；`/tts` GET 透传 200。
+- **门面测试套件**：`python -m pytest tests/ -q` → 175 passed / 1 failed。唯一失败
+  `test_ref_audio_local_symlink_escape_rejected` 为**既有问题，与本阶段无关**（工作树对 HEAD
+  零改动即可复现：测试 fixture 的 "outside" 文件实际建在前缀内，realpath 复核合法放行，
+  fixture 与测试意图不符）；另本机 ROS humble 的全局 pytest 插件会致收集崩溃，需
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`。
+- **镜像构建**：见 10.3。
+
+### 10.3 本机限制：docker 无 GPU
+
+本机 docker **未安装 nvidia-container-toolkit 且无密码 sudo，容器内 GPU 不可用**，故验证策略为：
+引擎服务在宿主机 conda 环境跑通完整契约（上表）+ 镜像构建成功 + 容器内 CPU 冒烟（import 级别）。
+实测结果（2026-10-10，构建全程官方源，未切镜像）：
+
+- 构建：`docker build -t chobits-chii-cosyvoice-engine docker/cosyvoice/` 成功，镜像 **8.12GB**。
+  唯一踩坑：pyworld 0.3.4 在 PyPI 无 cp310 manylinux 轮需源码编译，已在 pip 层同层加
+  `build-essential`（装完即删，与 `docker/Dockerfile` 编译 opencc 同款处理）。
+- CPU 冒烟：`from cosyvoice.cli.cosyvoice import AutoModel` import ok；torch 2.3.1+cu121
+  （容器内 `cuda_avail=False` 符合预期）；pyopenjtalk 词典就位（`run_frontend` 正常出 pron）；
+  ffmpeg 7.1.1。
+- entrypoint 两路径均验证：模型缺失时打印挂载指引并非零退出；`MODEL_SOURCE=ms` 且目录可写时
+  自动从 ModelScope 拉取预训练基座（下载行为实测触发，基座 ~9GB 故中断未拉完）。
+
+在带 GPU 的部署机上，需先安装 toolkit（**需用户手动执行**）：
+
+```bash
+sudo apt-get install nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+```
 
 ## 主要来源
 
