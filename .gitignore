@@ -1,4 +1,7 @@
 GPT-SoVITS/
+# 各方案分支的工作树残留 (cosy-voice 分支的框架 clone 与权重), 切分支时保持 status 干净
+CosyVoice/
+pretrained_models/
 data/wavs/
 # 含本机绝对路径, 由 tools/clean_dataset.py 重新生成
 data/gpt_sovits.list
