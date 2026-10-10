@@ -349,7 +349,7 @@ def _gain_pcm(pcm: bytes, target_rms: int = 5200, peak_cap: int = 31000, max_gai
 
 async def _merged_wav_stream_normalized(first_state, sentences: list, payload: dict):
     """流式归一模式 (?stream=1): 与 _merged_wav_stream 相同的逐句串行合并,
-    但每句整句缓冲后按峰值归一再下发, 首句剥掉引擎占位头、换发自带
+    但每句整句缓冲后按峰值归一再下发, 首个有效句剥掉引擎占位头、换发自带
     fmt 的流式头 (RIFF/data = 0xFFFFFFFF)。句间仍保持流式——前句播放时
     后句在合成, 长回复首声延迟从整包合成完成降到首句合成完成 (~1-2s).
     归一以句为单位: 句间响度一致性优于整包单次归一, 代价是句内逐块延迟
@@ -369,15 +369,16 @@ async def _merged_wav_stream_normalized(first_state, sentences: list, payload: d
                     head += await it.__anext__()
                 except StopAsyncIteration:
                     break
-            if i == 0:
-                fmt = _parse_wav_fmt(head) or (32000, 1)
-                yield _stream_wav_header(*fmt)
-                header_sent = True
             buf = bytearray(_strip_wav_header(head))
             async for chunk in it:
                 buf += chunk
             gained = _gain_pcm(bytes(buf))
             if gained:
+                # 头跟随首个有效数据下发: 首句为空被 continue 时, 后面句子
+                # 才不会以无头裸 PCM 开头
+                if not header_sent:
+                    yield _stream_wav_header(*(_parse_wav_fmt(head) or (32000, 1)))
+                    header_sent = True
                 yield gained
         finally:
             await upstream.aclose()

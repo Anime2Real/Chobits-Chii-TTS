@@ -118,6 +118,8 @@ def main() -> None:
     meta = []
     with open(src / "metadata.csv", encoding="utf-8") as f:
         for line in f:
+            if "|" not in line:
+                continue  # 空行/缺分隔的坏行: 与 eval_chobits 同口径跳过, 不整批崩
             name, text = line.rstrip("\n").split("|", 1)
             meta.append((name, text))
 
