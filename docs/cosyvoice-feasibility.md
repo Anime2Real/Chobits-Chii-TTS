@@ -1,10 +1,10 @@
 # CosyVoice 引入可行性调研
 
 > 调研日期：2026-10-09 · 分支：`cosy-voice`
-> 结论先行：**技术上可引入，许可无障碍（Apache-2.0 全栈）；zero-shot 克隆基线已在本机
-> RTX 4090 上实测跑通（RTF 0.32 / 流式首包 1.05s / 峰值显存增量 5.7GB，见第 9 节），
-> 日语假名化补丁验证为必需（不打补丁直接崩溃）**。
-> 是否切换需人工 AB 试听 zero-shot 与现有 GPT-SoVITS v2Pro e10 输出后决策。
+> 结论先行：**技术上可引入，许可无障碍（Apache-2.0 全栈）；zero-shot 与 SFT 均已在
+> RTX 4090 上实测跑通（第 9 节），日语假名化补丁验证为必需（不打补丁直接崩溃）**。
+> **选型已定（2026-10-10 人工试听）：采用 SFT 微调版**（`Fun-CosyVoice3-0.5B-chii-sft`），
+> 音色与发音均优于预训练 zero-shot 基线。下一步：封装引擎容器接入现有门面（阶段 2）。
 
 ## 1. 框架概览
 
@@ -203,8 +203,10 @@ python tools/cosyvoice_zeroshot_eval.py \
 | whisper-small 回译 | **チー、ヒデキなこと、大好き、ずっと一緒にいる。** | チー、秘敵のこと、大好き、ずっと一緒にいる |
 
 性能与基线持平（差异在测量噪声内）；**发音正确性改善**：人名「ヒデキ」（秀樹）说清楚了
-（基线误为「秘敵」），仅「のこと」偏「なこと」一处小偏差。音色相似度仍需人工 AB：
-`outputs/cosyvoice_sft/zero_shot.wav` vs `outputs/cosyvoice/zero_shot.wav`。
+（基线误为「秘敵」），仅「のこと」偏「なこと」一处小偏差。
+
+**人工试听结论（2026-10-10）：SFT 版优于 zero-shot 基线，选定为正式路线。**
+备用产物：`outputs/cosyvoice_sft/zero_shot.wav`（SFT）vs `outputs/cosyvoice/zero_shot.wav`（基线）。
 
 **微调注意事项**（复现必读）：
 1. `cosyvoice/bin/train.py` 与 `cosyvoice/utils/train_utils.py` 顶层 import deepspeed（torch_ddp
