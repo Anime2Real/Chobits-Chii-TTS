@@ -121,7 +121,8 @@ def main() -> None:
             name, text = line.rstrip("\n").split("|", 1)
             meta.append((name, text))
 
-    transcripts = list(csv.DictReader(open(src / "transcripts.csv", encoding="utf-8")))
+    with open(src / "transcripts.csv", encoding="utf-8") as f:
+        transcripts = list(csv.DictReader(f))
     by_ep = index_transcripts(transcripts)
 
     (dst / "wavs").mkdir(parents=True, exist_ok=True)
