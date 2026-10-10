@@ -244,8 +244,18 @@ SFT 模型封装为 Docker 引擎容器，**与 GPT-SoVITS 引擎同一 `/tts` �
   按 §9.4 同款修复（先 `setuptools<81`+wheel 再 `--no-build-isolation`）；pyopenjtalk==0.4.1 +
   open_jtalk 词典（MODEL_SOURCE 分支，与 `docker/Dockerfile` 同源）。
 - `docker/cosyvoice/entrypoint.sh`：模型目录完整性检查，缺失时打印挂载指引并非零退出；
-  `MODEL_SOURCE=ms` 且目录可写时自动下载官方预训练基座（**SFT 权重无发布渠道，挂载是必须路径**）；
+  目录可写时按 `MODEL_SOURCE` 自动下载：`hf-sft`（默认）拉 chii SFT 推理包
+  （HF `chenxin199305/Chobits-Chii-TTS-CosyVoice`），`ms` 拉官方预训练基座（冒烟/回退用）；
   带参数启动时直接 exec（CPU 冒烟/调试入口）。
+
+### 10.0 权重发布（2026-10-11）
+
+chii SFT 权重已发布到 Hugging Face：**[chenxin199305/Chobits-Chii-TTS-CosyVoice](https://huggingface.co/chenxin199305/Chobits-Chii-TTS-CosyVoice)**
+（5.56GB 自包含推理包，15 个文件）。打包策略：SFT 的 `llm.pt`/`flow.pt` + 基座推理必需文件
+（`hift.pt`/`campplus.onnx`/`speech_tokenizer_v3.onnx`/`CosyVoice-BlankEN`/yaml）；
+剔除推理用不到的 `llm.rl.pt`（RL 变体）、`flow.decoder.estimator.fp32.onnx`（TRT 导出）、
+`speech_tokenizer_v3.batch.onnx`（训练），合计省 4.3GB。发布前已实测暂存目录独立加载 + 合成通过。
+参考音频 `ref_audio.wav` 仍沿用 GPT-SoVITS 版模型仓库中的文件。
 
 ### 10.1 构建与运行
 

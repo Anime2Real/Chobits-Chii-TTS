@@ -5,16 +5,18 @@
 # /data 卷约定 (可整体挂载, 也可按子目录分别挂载):
 #   /data/model/    Fun-CosyVoice3 模型目录 (llm.pt / flow.pt / hift.pt / campplus.onnx /
 #                   speech_tokenizer_v3.onnx / cosyvoice3.yaml / CosyVoice-BlankEN/)
-#                   ★ SFT 微调权重 (Fun-CosyVoice3-0.5B-chii-sft) 无发布渠道, 必须从宿主机
-#                     挂载 (MODEL_DIR 指向挂载点); MODEL_SOURCE=ms 自动下载的只是官方
-#                     zero-shot 预训练基座 Fun-CosyVoice3-0.5B-2512, 供冒烟/回退用
+#                   SFT 微调权重 (chii) 已发布 Hugging Face: chenxin199305/Chobits-Chii-TTS-CosyVoice
+#                   (自包含推理包); MODEL_SOURCE=hf-sft 且目录可写时自动下载 (默认),
+#                   也可从宿主机挂载 (MODEL_DIR 指向挂载点);
+#                   MODEL_SOURCE=ms 下载的是官方 zero-shot 预训练基座 Fun-CosyVoice3-0.5B-2512,
+#                   供冒烟/回退用
 #   /data/models/   参考音频 ref_audio.wav 等 (门面经 ref_audio_path 逐请求指定;
 #                   缺失仅在启动时 WARN, 不阻断——请求到达时引擎侧 4xx 兜底)
 set -euo pipefail
 
 DATA=/data
 MODEL_DIR="${MODEL_DIR:-$DATA/model}"
-MODEL_SOURCE="${MODEL_SOURCE:-ms}"
+MODEL_SOURCE="${MODEL_SOURCE:-hf-sft}"
 ENGINE_PORT="${ENGINE_PORT:-9880}"
 
 # --- 启动前端口占用检测 (与 ../entrypoint.sh 同款; 容器内读不到 /proc 时跳过) -----------
@@ -49,17 +51,23 @@ model_ready() {
         && [ -f "$MODEL_DIR/cosyvoice3.yaml" ] && [ -d "$MODEL_DIR/CosyVoice-BlankEN" ]
 }
 
-if ! model_ready && [ "$MODEL_SOURCE" = "ms" ]; then
+if ! model_ready && { [ "$MODEL_SOURCE" = "ms" ] || [ "$MODEL_SOURCE" = "hf-sft" ]; }; then
     if [ ! -d "$MODEL_DIR" ]; then
         mkdir -p "$MODEL_DIR" 2>/dev/null || true
     fi
     if [ -d "$MODEL_DIR" ] && [ -w "$MODEL_DIR" ]; then
-        echo "[engine] 模型缺失, 自动下载预训练基座 Fun-CosyVoice3-0.5B-2512 (ModelScope) -> $MODEL_DIR"
-        echo "[engine] 注意: 自动下载的是官方 zero-shot 基座; SFT 微调权重请从宿主机挂载 (见头部注释)"
         # shellcheck disable=SC1091
         source /opt/conda/etc/profile.d/conda.sh && conda activate CosyVoice
-        python -c "from modelscope import snapshot_download; \
-                   snapshot_download('FunAudioLLM/Fun-CosyVoice3-0.5B-2512', local_dir='$MODEL_DIR')"
+        if [ "$MODEL_SOURCE" = "hf-sft" ]; then
+            echo "[engine] 模型缺失, 自动下载 chii SFT 推理包 (Hugging Face chenxin199305/Chobits-Chii-TTS-CosyVoice) -> $MODEL_DIR"
+            python -c "from huggingface_hub import snapshot_download; \
+                       snapshot_download('chenxin199305/Chobits-Chii-TTS-CosyVoice', local_dir='$MODEL_DIR')"
+        else
+            echo "[engine] 模型缺失, 自动下载预训练基座 Fun-CosyVoice3-0.5B-2512 (ModelScope) -> $MODEL_DIR"
+            echo "[engine] 注意: 下载的是官方 zero-shot 基座而非 chii SFT 权重; SFT 包请用 MODEL_SOURCE=hf-sft 或宿主机挂载"
+            python -c "from modelscope import snapshot_download; \
+                       snapshot_download('FunAudioLLM/Fun-CosyVoice3-0.5B-2512', local_dir='$MODEL_DIR')"
+        fi
     fi
 fi
 
@@ -72,8 +80,8 @@ if ! model_ready; then
     echo "[engine]     -v /srv/chii-tts/cosyvoice/model:/data/model \\" >&2
     echo "[engine]     -v /srv/chii-tts/cosyvoice/models:/data/models \\" >&2
     echo "[engine]     chobits-chii-cosyvoice-engine" >&2
-    echo "[engine] (SFT 权重无发布渠道, 挂载是必须路径; 或将 MODEL_SOURCE=ms 且目录可写" >&2
-    echo "[engine]  让容器自动下载官方 zero-shot 基座)" >&2
+    echo "[engine] (或将 MODEL_SOURCE=hf-sft 且目录可写, 让容器自动下载 chii SFT 推理包;" >&2
+    echo "[engine]  MODEL_SOURCE=ms 则下载官方 zero-shot 基座)" >&2
     exit 1
 fi
 

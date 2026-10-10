@@ -6,6 +6,7 @@
 		<a href="https://madewithlove.org.in"><img alt="Made with Love" src="https://img.shields.io/badge/Made%20with-Love-ff69b4.svg"></a>
 		<a href="https://github.com/Anime2Real/Chobits-Chii-TTS"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-Chobits--Chii--TTS-181717?logo=github"></a>
 		<a href="https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice"><img alt="Dataset: Chobits-Chii-Voice" src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Chobits--Chii--Voice-yellow"></a>
+		<a href="https://huggingface.co/chenxin199305/Chobits-Chii-TTS-CosyVoice"><img alt="Hugging Face Model" src="https://img.shields.io/badge/%F0%9F%A4%97%20Model-Chobits--Chii--TTS--CosyVoice-yellow"></a>
 		<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="License: CC BY-NC-SA 4.0" src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg"></a>
 		<img alt="Language: Japanese" src="https://img.shields.io/badge/Language-Japanese-green.svg">
 	</p>
@@ -18,6 +19,7 @@
 
 > ✅ CosyVoice 方案已验证通过：zero-shot 基线与 21 分钟数据 SFT 微调均在 RTX 4090 实测跑通，
 > 人工试听选定 **SFT 微调版**为正式路线；引擎容器与门面端到端联调完成。
+> 权重已发布到 [Hugging Face](https://huggingface.co/chenxin199305/Chobits-Chii-TTS-CosyVoice)，见[模型文件](#-模型文件)。
 > 完整调研与实测记录见 **[docs/cosyvoice-feasibility.md](docs/cosyvoice-feasibility.md)**。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 TTS（语音合成）模型项目。
@@ -30,7 +32,7 @@
 
 ## 🎧 示例试听
 
-SFT 权重暂未发布（仅本地），示例音频需本地生成（见[快速开始](#-快速开始从零复现)第 5 步）：
+下载权重后本地生成（见[快速开始](#-快速开始从零复现)第 5 步）：
 
 ```bash
 python tools/cosyvoice_zeroshot_eval.py \
@@ -73,13 +75,24 @@ TensorRT-LLM + 高端卡全优化下界；裸 HF 推理约 1s，部署机可再�
 
 ## 📦 模型文件
 
-SFT 微调权重暂未发布（仅本地）。自行训练见下方快速开始；推理所需的全部文件：
+SFT 微调权重已发布到 Hugging Face（自包含推理包，含基座推理必需文件，下载即可推理，无需训练）：
+**[huggingface.co/chenxin199305/Chobits-Chii-TTS-CosyVoice](https://huggingface.co/chenxin199305/Chobits-Chii-TTS-CosyVoice)**
+
+```bash
+# 下载模型 (约 5.6GB)
+pip install huggingface_hub
+hf download chenxin199305/Chobits-Chii-TTS-CosyVoice \
+  --local-dir CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B-chii-sft
+```
 
 | 文件 | 说明 |
 | --- | --- |
-| `llm.pt` / `flow.pt` | SFT 微调后的语义/声学模型（val_best 平均，各约 2.0GB/1.3GB） |
-| 基座其余文件 | `speech_tokenizer_v3.onnx`、`campplus.onnx`、`hift.pt`、`CosyVoice-BlankEN/` 等，来自 ModelScope `FunAudioLLM/Fun-CosyVoice3-0.5B-2512` |
-| `models/ref_audio.wav` | 参考音频（ep07「秀樹は地位を拾ってくれた」，4.2s，zero-shot 推理仍需要） |
+| `llm.pt` / `flow.pt` | SFT 微调后的语义/声学模型（val_best 平均，各约 2.4GB/1.3GB） |
+| `hift.pt` / `campplus.onnx` / `speech_tokenizer_v3.onnx` / `CosyVoice-BlankEN/` | 基座推理必需文件，来自 `FunAudioLLM/Fun-CosyVoice3-0.5B-2512` |
+| `models/ref_audio.wav` | 参考音频（ep07「秀樹は地位を拾ってくれた」，4.2s，zero-shot 推理仍需要；在 GPT-SoVITS 版模型仓库 [Chobits-Chii-TTS](https://huggingface.co/chenxin199305/Chobits-Chii-TTS) 中） |
+
+推理不需要的基座文件（`llm.rl.pt`、`flow.decoder.estimator.fp32.onnx`、`speech_tokenizer_v3.batch.onnx`）
+未包含在内，需要时从[基座仓库](https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512)补齐。
 
 ## 🗂 仓库结构
 
@@ -167,6 +180,7 @@ python training/prepare_cosyvoice_data.py /tmp/chii-voice-hf/wavs
 docker build -t chobits-chii-cosyvoice-engine docker/cosyvoice/
 
 # 2. 启动引擎 (挂载 SFT 模型目录与参考音频; 需要 nvidia-container-toolkit)
+#    空目录挂载时容器自动从 Hugging Face 拉 chii SFT 推理包 (MODEL_SOURCE=hf-sft 默认)
 docker run -d --name chobits-chii-cosyvoice-engine \
   --gpus all --restart unless-stopped \
   -p 127.0.0.1:9882:9880 \
