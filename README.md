@@ -14,6 +14,9 @@
 
 > 💖 如果这个项目对你有帮助，欢迎在 [GitHub](https://github.com/Anime2Real/Chobits-Chii-TTS) 点个 Star —— 你的支持能让更多人发现小叽！
 
+> 🌿 本分支（`gpt-sovits`）是 **GPT-SoVITS 生产方案**（当前线上服务）。仓库 `main` 分支为[分支索引](https://github.com/Anime2Real/Chobits-Chii-TTS)；
+> CosyVoice3 方案（已验证，待上线）见 [`cosy-voice`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/cosy-voice) 分支。
+
 > ✅ 首轮模型已训练完成并人工试听通过（GPT-SoVITS v2Pro，e10 checkpoint），权重已发布到 [Hugging Face](https://huggingface.co/chenxin199305/Chobits-Chii-TTS)，见[模型文件](#-模型文件)。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 TTS（语音合成）模型项目。
