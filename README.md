@@ -138,9 +138,10 @@ git clone https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice
 conda create -n GPTSoVits -c conda-forge --override-channels python=3.10 pip -y
 conda activate GPTSoVits
 
-# 克隆框架 (本项目 fork 的修复分支: 基于上游 48b1a01, 含非流式合成线程池修复)
+# 克隆框架 (本项目 fork 的锁定 tag: 基于上游 48b1a01, 含非流式合成线程池修复;
+# 该修复已并入 fork main, 开发用 clone 也可直接跟 main)
 git clone https://github.com/Anime2Real/GPT-SoVITS.git
-cd GPT-SoVITS && git checkout fix-nonstream-threadpool
+cd GPT-SoVITS && git checkout chobits-tts-lock-v1
 
 # 一键安装 (依赖 + 预训练模型, 模型走 ModelScope 源; 非 TTY 环境需 TERM=xterm,
 # WORKFLOW=true 跳过上游交互确认 —— 与 tools/setup_env.sh 保持一致)
@@ -152,8 +153,8 @@ TERM=xterm WORKFLOW=true bash install.sh --device CU128 --source ModelScope
 
 > **两个 GPT-SoVITS clone 的定位**：本仓库内嵌的 `GPT-SoVITS/` 是训练/推理用 clone
 > （不入库，预训练模型与训练产物都在里面），remote 应指向本项目 fork
-> （`git@github.com:Anime2Real/GPT-SoVITS.git`）并检出 `fix-nonstream-threadpool`
-> （49587af，与 `docker/Dockerfile` 的 `GS_REPO_REF` 一致）；工作区根目录
+> （`git@github.com:Anime2Real/GPT-SoVITS.git`）并检出 tag `chobits-tts-lock-v1`
+> （= 49587af 那棵树，与 `docker/Dockerfile` 的 `GS_REPO_REF` 一致）；工作区根目录
 > （`../GPT-SoVITS`）的独立 clone 是 fork 开发用（改修复、向上游提 PR 走那边）。
 > 早期内嵌 clone 的 remote 曾指向上游 RVC-Boss 经 ghfast.top 代理，2026-10 已统一修正为 fork。
 

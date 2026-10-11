@@ -20,8 +20,8 @@ docker build -t chobits-chii-tts-engine \
   docker/
 ```
 
-引擎源码经 `GS_REPO_REF` 锁到 README 验证过的 commit（默认 `49587af3`，
-即 fix-nonstream-threadpool 分支 2026-09-16 的 HEAD，构建时可用 `--build-arg` 覆盖）；
+引擎源码经 `GS_REPO_REF` 锁到 README 验证过的 commit（默认 tag `chobits-tts-lock-v1`，
+= 原 fix-nonstream-threadpool 分支 2026-09-16 的 HEAD `49587af3` 同一棵树，构建时可用 `--build-arg` 覆盖）；
 `MODEL_SOURCE`（ms/hf/hf-mirror）控制构建期 nltk_data 与 open_jtalk 词典的下载源，默认 ModelScope。
 
 ## 2. 启动引擎容器
