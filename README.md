@@ -1,5 +1,5 @@
 <div align="center">
-	<h1>Chobits</h1>
+	<h1>Chobits-Chii-TTS</h1>
 	<p><b>叽～</b> 小叽的语音合成模型</p>
 	<p>《人形电脑天使心》(Chobits) 中 <b>小叽 (Chii / ちぃ)</b> 角色的 TTS（语音合成）模型项目，基于 GPT-SoVITS 微调。</p>
 	<p>
