@@ -89,7 +89,7 @@ hf download chenxin199305/Chobits-Chii-TTS-CosyVoice \
 | --- | --- |
 | `llm.pt` / `flow.pt` | SFT 微调后的语义/声学模型（val_best 平均，各约 2.4GB/1.3GB） |
 | `hift.pt` / `campplus.onnx` / `speech_tokenizer_v3.onnx` / `CosyVoice-BlankEN/` | 基座推理必需文件，来自 `FunAudioLLM/Fun-CosyVoice3-0.5B-2512` |
-| `models/ref_audio.wav` | 参考音频（ep07「秀樹は地位を拾ってくれた」，4.2s，zero-shot 推理仍需要；在 GPT-SoVITS 版模型仓库 [Chobits-Chii-TTS](https://huggingface.co/chenxin199305/Chobits-Chii-TTS) 中） |
+| `models/ref_audio.wav` | 参考音频（ep07「秀樹は地位を拾ってくれた」，4.2s，zero-shot 推理仍需要；在 GPT-SoVITS 版模型仓库 [Chobits-Chii-TTS-GPTSoVITS](https://huggingface.co/chenxin199305/Chobits-Chii-TTS-GPTSoVITS) 中） |
 
 推理不需要的基座文件（`llm.rl.pt`、`flow.decoder.estimator.fp32.onnx`、`speech_tokenizer_v3.batch.onnx`）
 未包含在内，需要时从[基座仓库](https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512)补齐。

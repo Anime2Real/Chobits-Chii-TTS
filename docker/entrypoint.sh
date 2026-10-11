@@ -12,7 +12,7 @@ set -euo pipefail
 GS=/opt/GPT-SoVITS
 DATA=/data
 MODEL_SOURCE="${MODEL_SOURCE:-ms}"           # ms=ModelScope / hf / hf-mirror
-CHII_WEIGHTS_REPO="${CHII_WEIGHTS_REPO:-chenxin199305/Chobits-Chii-TTS}"
+CHII_WEIGHTS_REPO="${CHII_WEIGHTS_REPO:-chenxin199305/Chobits-Chii-TTS-GPTSoVITS}"
 DEVICE="${DEVICE:-cuda}"
 IS_HALF="${IS_HALF:-true}"
 ENGINE_PORT="${ENGINE_PORT:-9880}"
