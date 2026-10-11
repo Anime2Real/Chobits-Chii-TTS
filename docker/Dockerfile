@@ -7,10 +7,11 @@
 # 运行见 docs/deployment.md; 预训练模型与 chii 权重经 /data 卷挂载, 缺失时首次启动自动下载
 FROM condaforge/miniforge3:25.3.1-0
 
-# 锁定到本项目 fork 的修复提交 (fix-nonstream-threadpool 分支 HEAD @ 2026-09-16,
-# 基于上游 48b1a01, 含非流式合成线程池修复); 完整 SHA 保证可复现, 仍可用
+# 锁定到 Anime2Real/GPT-SoVITS 的不可变 tag chobits-tts-lock-v1（内容 = 上游 main@48b1a01
+# + 非流式合成线程池修复 49587af，与此前锁定的裸 SHA 同一棵树；该 SHA 已并入 fork 的
+# main，分支已删，tag 为唯一锁定引用，请勿移动）。仍可用
 # --build-arg GS_REPO_REF=<分支名或 SHA> 覆盖
-ARG GS_REPO_REF=49587af32c427e3123dcc23c03de00a3cfe0adbb
+ARG GS_REPO_REF=chobits-tts-lock-v1
 ARG GS_REPO_URL=https://github.com/Anime2Real/GPT-SoVITS.git
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128

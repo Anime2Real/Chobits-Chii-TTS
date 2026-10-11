@@ -5,8 +5,8 @@
 # 步骤:
 #   1. 安装 Miniconda (~/miniconda3, 清华镜像)
 #   2. 创建 conda 环境 GPTSoVits (Python 3.10)
-#   3. 克隆 GPT-SoVITS 修复分支 (fix-nonstream-threadpool; docker/Dockerfile
-#      的引擎镜像则锁定到该分支的 commit SHA, 见 deployment.md)
+#   3. 克隆 GPT-SoVITS 并检出锁定 tag chobits-tts-lock-v1 (与 docker/Dockerfile
+#      的引擎镜像同一棵树, 见 deployment.md; 修复已并入 fork main)
 #   4. 运行上游 install.sh --device CU128 --source ModelScope
 #   5. 应用版本修复 (见下), 这些坑在本仓库 README 有记录
 #
@@ -24,7 +24,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GS_ROOT="$REPO_ROOT/GPT-SoVITS"
-GS_REF=fix-nonstream-threadpool
+GS_REF=chobits-tts-lock-v1
 MINICONDA="${MINICONDA:-$HOME/miniconda3}"
 ENV_NAME=GPTSoVits
 TORCH_INDEX=https://download.pytorch.org/whl/cu128
