@@ -27,8 +27,9 @@
 | --- | --- | --- | --- |
 | [`gpt-sovits`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/gpt-sovits) | GPT-SoVITS v2Pro 微调 | **生产运行中** | 首个跑通的方案：数据清洗 → 全量微调（e10 checkpoint，已发布 [Hugging Face](https://huggingface.co/chenxin199305/Chobits-Chii-TTS-GPTSoVITS)）→ Docker 引擎 + HTTP 门面（鉴权/限流/OpenAI 兼容垫片）部署。训练/复现/部署文档齐全 |
 | [`cosy-voice`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/cosy-voice) | Fun-CosyVoice3-0.5B SFT | 验证通过，待上线 | 引入调研 + RTX 4090 实测（zero-shot RTF 0.32 / 流式首包 ~1s）+ 21 分钟数据 SFT 微调（人工试听优于 zero-shot 基线）+ 与 gpt-sovits 门面零改动兼容的引擎容器。完整调研与实测记录见该分支 `docs/cosyvoice-feasibility.md` |
+| [`gpt-sovits-genie`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/gpt-sovits-genie) | Genie-TTS（GPT-SoVITS CPU 引擎） | 验证未通过 | Genie 纯 CPU 推理（显存恒为 0，本可给同卡服务腾显存），但 2.0.2 的 ONNX 转换器仅支持 v2/v2ProPlus 架构，本项目 v2Pro 模型（VITS 512 通道）转换产物无法加载。完整记录见该分支 `docs/genie-feasibility.md` |
 
-两分支共享同一部署架构（引擎 Docker 容器绑回环 + 宿主机门面唯一对外入口），门面代码一致、可互换引擎。
+gpt-sovits 与 cosy-voice 两分支共享同一部署架构（引擎 Docker 容器绑回环 + 宿主机门面唯一对外入口），门面代码一致、可互换引擎。
 
 ## 📄 许可协议
 
