@@ -6,7 +6,7 @@
 		<a href="https://madewithlove.org.in"><img alt="Made with Love" src="https://img.shields.io/badge/Made%20with-Love-ff69b4.svg"></a>
 		<a href="https://github.com/Anime2Real/Chobits-Chii-TTS"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-Chobits--Chii--TTS-181717?logo=github"></a>
 		<a href="https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice"><img alt="Dataset: Chobits-Chii-Voice" src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Chobits--Chii--Voice-yellow"></a>
-		<a href="https://huggingface.co/chenxin199305/Chobits-Chii-TTS"><img alt="Hugging Face Model" src="https://img.shields.io/badge/%F0%9F%A4%97%20Model-Chobits--Chii--TTS-yellow"></a>
+		<a href="https://huggingface.co/chenxin199305/Chobits-Chii-TTS-GPTSoVITS"><img alt="Hugging Face Model" src="https://img.shields.io/badge/%F0%9F%A4%97%20Model-Chobits--Chii--TTS--GPTSoVITS-yellow"></a>
 		<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="License: CC BY-NC-SA 4.0" src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg"></a>
 		<img alt="Language: Japanese" src="https://img.shields.io/badge/Language-Japanese-green.svg">
 	</p>
@@ -17,7 +17,7 @@
 > 🌿 本分支（`gpt-sovits`）是 **GPT-SoVITS 生产方案**（当前线上服务）。仓库 `main` 分支为[分支索引](https://github.com/Anime2Real/Chobits-Chii-TTS)；
 > CosyVoice3 方案（已验证，待上线）见 [`cosy-voice`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/cosy-voice) 分支。
 
-> ✅ 首轮模型已训练完成并人工试听通过（GPT-SoVITS v2Pro，e10 checkpoint），权重已发布到 [Hugging Face](https://huggingface.co/chenxin199305/Chobits-Chii-TTS)，见[模型文件](#-模型文件)。
+> ✅ 首轮模型已训练完成并人工试听通过（GPT-SoVITS v2Pro，e10 checkpoint），权重已发布到 [Hugging Face](https://huggingface.co/chenxin199305/Chobits-Chii-TTS-GPTSoVITS)，见[模型文件](#-模型文件)。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 TTS（语音合成）模型项目。
 
@@ -63,12 +63,12 @@ https://github.com/user-attachments/assets/06c1976c-84c9-4fd2-b472-d5cdfe9be485
 ## 📦 模型文件
 
 当前首选权重（人工试听选定，v2Pro，e10）已发布到 Hugging Face：
-**[huggingface.co/chenxin199305/Chobits-Chii-TTS](https://huggingface.co/chenxin199305/Chobits-Chii-TTS)**
+**[huggingface.co/chenxin199305/Chobits-Chii-TTS-GPTSoVITS](https://huggingface.co/chenxin199305/Chobits-Chii-TTS-GPTSoVITS)**
 
 ```bash
 # 下载模型 (约 290MB)
 pip install huggingface_hub
-hf download chenxin199305/Chobits-Chii-TTS --local-dir models/
+hf download chenxin199305/Chobits-Chii-TTS-GPTSoVITS --local-dir models/
 ```
 
 | 文件 | 说明 |
