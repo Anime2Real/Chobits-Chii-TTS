@@ -6,7 +6,7 @@
 		<a href="https://madewithlove.org.in"><img alt="Made with Love" src="https://img.shields.io/badge/Made%20with-Love-ff69b4.svg"></a>
 		<a href="https://github.com/Anime2Real/Chobits-Chii-TTS"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-Chobits--Chii--TTS-181717?logo=github"></a>
 		<a href="https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice"><img alt="Dataset: Chobits-Chii-Voice" src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Chobits--Chii--Voice-yellow"></a>
-		<a href="https://huggingface.co/chenxin199305/Chobits-Chii-TTS"><img alt="Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97%20Model-Chobits--Chii--TTS-yellow"></a>
+		<a href="https://huggingface.co/chenxin199305/Chobits-Chii-TTS-GPTSoVITS"><img alt="Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97%20Model-Chobits--Chii--TTS--GPTSoVITS-yellow"></a>
 		<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="License: CC BY-NC-SA 4.0" src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg"></a>
 		<img alt="Language: Japanese" src="https://img.shields.io/badge/Language-Japanese-green.svg">
 	</p>
@@ -25,7 +25,7 @@
 
 | 分支 | 方案 | 状态 | 说明 |
 | --- | --- | --- | --- |
-| [`gpt-sovits`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/gpt-sovits) | GPT-SoVITS v2Pro 微调 | **生产运行中** | 首个跑通的方案：数据清洗 → 全量微调（e10 checkpoint，已发布 [Hugging Face](https://huggingface.co/chenxin199305/Chobits-Chii-TTS)）→ Docker 引擎 + HTTP 门面（鉴权/限流/OpenAI 兼容垫片）部署。训练/复现/部署文档齐全 |
+| [`gpt-sovits`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/gpt-sovits) | GPT-SoVITS v2Pro 微调 | **生产运行中** | 首个跑通的方案：数据清洗 → 全量微调（e10 checkpoint，已发布 [Hugging Face](https://huggingface.co/chenxin199305/Chobits-Chii-TTS-GPTSoVITS)）→ Docker 引擎 + HTTP 门面（鉴权/限流/OpenAI 兼容垫片）部署。训练/复现/部署文档齐全 |
 | [`cosy-voice`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/cosy-voice) | Fun-CosyVoice3-0.5B SFT | 验证通过，待上线 | 引入调研 + RTX 4090 实测（zero-shot RTF 0.32 / 流式首包 ~1s）+ 21 分钟数据 SFT 微调（人工试听优于 zero-shot 基线）+ 与 gpt-sovits 门面零改动兼容的引擎容器。完整调研与实测记录见该分支 `docs/cosyvoice-feasibility.md` |
 
 两分支共享同一部署架构（引擎 Docker 容器绑回环 + 宿主机门面唯一对外入口），门面代码一致、可互换引擎。
