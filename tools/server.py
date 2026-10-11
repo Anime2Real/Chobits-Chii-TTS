@@ -13,10 +13,12 @@ OpenAI TTS 兼容垫片 (客户端 baseUrl 填 http(s)://<IP>:9880/v1):
   - GET  /v1/models        → 固定返回 chii-tts
   - POST /v1/audio/speech  → OpenAI TTS 协议: {"model", "input", "voice", "response_format"?, "speed"?}
     voice 映射引擎侧参考音频 (当前仅 "chii");
-    response_format 支持 wav/aac/opus (默认 wav; mp3/flac/pcm 暂不支持, 返回 400);
+    response_format 支持 wav/aac/opus (默认 wav; mp3/flac/pcm 暂不支持, 返回 400;
+    opus 走引擎 media_type=ogg, 即 Ogg/Vorbis 封装而非 Opus 编码);
     speed (0.25~4.0) 映射 speed_factor; text_lang 由服务端钉死 auto,
     其余采样参数取引擎默认值. wav 为流式输出 (边合成边推流, 首字延迟低);
-    aac/opus 为合成完成后一次性返回.
+    aac/opus 为合成完成后一次性返回. query ?stream=1 时 wav 流式改走"整句缓冲 +
+    逐句 RMS 响度归一"路径 (默认路径不做响度归一, 两者听感响度不同).
 
 wav 流式路径的门面侧加固 (引擎流式模式多句并行批推理会触发
 "Sizes of tensors must match": 返回 200 但音频截断, 反复触发还会拖垮引擎
@@ -27,13 +29,16 @@ wav 流式路径的门面侧加固 (引擎流式模式多句并行批推理会�
     含逗号/顿号等, 门面切句管不到——批推理同样触发该 bug; 对单片段文本无影响,
     本就只有 1 个片段进批);
   - 上游即败: 合成开始前预读上游首块, 连接失败/非 200/空流时返回 502 JSON,
-    不发 200 空流; 已在流中的失败只能中断连接.
+    不发 200 空流; 已在流中的失败只能中断连接. 例外: ?stream=1 归一路径整句缓冲
+    后才发数据, 首块只含 WAV 头且其余句子皆空流时一个字节也发不出, 状态行已发出
+    无法追改, 回的是 200 空 body.
 
 健康检查:
   - GET /v1/models      → 轻量存活 (进程级, 固定响应);
   - GET /healthz/deep   → 深度检查: 用极短文本向引擎发一次真实合成
     (短超时 CHII_TTS_DEEP_PROBE_TIMEOUT, 默认 20s), 能发现"200 空流"变砖;
-    结果缓存 CHII_TTS_DEEP_PROBE_TTL 秒 (默认 30) 避免高频探测烧 GPU;
+    结果缓存 CHII_TTS_DEEP_PROBE_TTL 秒 (默认 30) 避免高频探测烧 GPU, 缓存过期后的
+    并发探测走 single-flight 锁 (同时至多一次真实合成, 其余请求回缓存结果);
     响应体带 ref_ready (启动时参考文本可读且非空则为 true) —— 参考文本缺失
     时 OpenAI 垫片静默退化为零样本提示, 引擎仍健康, 状态码不变, 靠该字段
     与启动 WARN 日志暴露降质; 与其余端点一样须带 API key.
@@ -156,6 +161,13 @@ async def _init_inflight_sem():
     _inflight_sem = asyncio.Semaphore(MAX_INFLIGHT)
 
 
+@APP.on_event("startup")
+async def _init_deep_probe_lock():
+    # 同 _inflight_sem：asyncio.Lock 在 Python 3.8 上创建即绑 loop，须在运行中的 loop 内建
+    global _deep_probe_lock
+    _deep_probe_lock = asyncio.Lock()
+
+
 class _InflightHold:
     """在途信号量持有句柄：幂等释放，允许把持有期从端点函数延长到流式响应体写完。"""
 
@@ -232,7 +244,9 @@ VOICES = {
     },
 }
 TTS_MODEL = "chii-tts"
-# OpenAI response_format → 引擎 media_type (ogg 即 opus 的 ogg 封装); mp3/flac/pcm 暂不支持
+# OpenAI response_format → 引擎 media_type; mp3/flac/pcm 暂不支持 (引擎侧只收 wav/raw/ogg/aac).
+# "opus" 映射到引擎 media_type=ogg, 而引擎以 sf.SoundFile(format="ogg") 写文件且未指定
+# subtype —— libsndfile 的 Ogg 默认编码是 Vorbis, 故容器是 Ogg、编码并非 Opus
 FORMAT_MAP = {"wav": "wav", "aac": "aac", "opus": "ogg"}
 # OpenAI TTS 协议不传语言: 钉死 auto (引擎为 v2Pro, 语言列表含 auto)
 TEXT_LANG = "auto"
@@ -349,11 +363,16 @@ def _gain_pcm(pcm: bytes, target_rms: int = 5200, peak_cap: int = 31000, max_gai
 
 async def _merged_wav_stream_normalized(first_state, sentences: list, payload: dict):
     """流式归一模式 (?stream=1): 与 _merged_wav_stream 相同的逐句串行合并,
-    但每句整句缓冲后按峰值归一再下发, 首个有效句剥掉引擎占位头、换发自带
-    fmt 的流式头 (RIFF/data = 0xFFFFFFFF)。句间仍保持流式——前句播放时
+    但每句整句缓冲后按 RMS 响度归一再下发 (_gain_pcm), 首个有效句剥掉引擎占位头、
+    换发自带 fmt 的流式头 (RIFF/data = 0xFFFFFFFF)。句间仍保持流式——前句播放时
     后句在合成, 长回复首声延迟从整包合成完成降到首句合成完成 (~1-2s).
     归一以句为单位: 句间响度一致性优于整包单次归一, 代价是句内逐块延迟
-    让位于整句缓冲 (单句 1-4s, 可接受)."""
+    让位于整句缓冲 (单句 1-4s, 可接受).
+    与默认路径的差别: 只有本路径调 _gain_pcm 做响度归一, 不带 ?stream=1 的
+    wav 流式 (_merged_wav_stream) 原样透传引擎音量, 两者听感响度不同.
+    产出为空的边界: 首块只含 WAV 头、其后无数据且其余句子皆空流时, 本生成器一字节不
+    产出, 而状态行在 body 迭代前已发出、无法追改成 502, 客户端收到 200 空 body
+    (默认路径此时至少会把这含头的第一个字节块原样下发)."""
     header_sent = False
     for i, sentence in enumerate(sentences):
         try:
@@ -382,8 +401,6 @@ async def _merged_wav_stream_normalized(first_state, sentences: list, payload: d
                 yield gained
         finally:
             await upstream.aclose()
-    if not header_sent:
-        return
 
 
 async def _merged_wav_stream(first_state, sentences: list[str], payload: dict):
@@ -425,6 +442,11 @@ async def _merged_wav_stream(first_state, sentences: list[str], payload: dict):
 DEEP_PROBE_TTL = _getenv_float("DEEP_PROBE_TTL", 30.0)
 DEEP_PROBE_TIMEOUT = _getenv_float("DEEP_PROBE_TIMEOUT", 20.0)
 _deep_probe: dict = {"at": 0.0, "status": "degraded", "engine": "not probed yet"}
+# single-flight：探测在途期间并发进来的监控请求直接回缓存结果（不排队等待，
+# 首探尚未完成时回的是上一次缓存值，可能是初值 degraded）。深探测既不在限流路径内
+# （中间件 limited_path 只含 /tts 与 /v1/audio/speech）、也不占在途信号量，
+# 不加这道锁时 N 个并发监控请求就是 N 次 GPU 合成
+_deep_probe_lock: asyncio.Lock | None = None
 
 
 async def _probe_engine() -> dict:
@@ -458,11 +480,16 @@ async def healthz():
 
 @APP.get("/healthz/deep")
 async def healthz_deep():
-    if time.time() - _deep_probe["at"] >= DEEP_PROBE_TTL:
-        result = await _probe_engine()
-        _deep_probe.update(result, at=time.time())
-        if result["status"] != "ok":
-            print(f"[healthz] deep probe degraded: {result['engine']}", file=sys.stderr)
+    global _deep_probe_lock
+    if _deep_probe_lock is None:  # 防御兜底（同 _acquire_inflight）：协程内创建，绑当前 loop
+        _deep_probe_lock = asyncio.Lock()
+    if (time.time() - _deep_probe["at"] >= DEEP_PROBE_TTL
+            and not _deep_probe_lock.locked()):  # 探测在途：直接用缓存结果，不再触发一次合成
+        async with _deep_probe_lock:
+            result = await _probe_engine()
+            _deep_probe.update(result, at=time.time())
+            if result["status"] != "ok":
+                print(f"[healthz] deep probe degraded: {result['engine']}", file=sys.stderr)
     # ref_ready 不进状态码：参考文本缺失/为空是降质而非变砖，引擎健康仍回 200，
     # 避免惊动监控；运维应盯 ref_ready=false 的告警（启动时门面已打 WARN 日志）
     return JSONResponse(
@@ -660,7 +687,9 @@ TTS_ALLOWED_KEYS = {
     "batch_size", "batch_threshold", "split_bucket", "return_fragment",
     "fixed_length_chunk", "parallel_infer", "sample_steps", "super_sampling",
 }
-TTS_MEDIA_TYPES = {"wav", "aac", "ogg", "mp3", "flac", "pcm"}
+# 与引擎 api_v2 的 media_type 白名单对齐（wav/raw/ogg/aac）：mp3/flac/pcm 引擎不接受，
+# 门面放行只会得到引擎 400；raw 为无容器裸 PCM，引擎支持
+TTS_MEDIA_TYPES = {"wav", "aac", "ogg", "raw"}
 # 数值钳制区间（防 GPU 消耗放大）；不在表内的数值参数原样放行
 TTS_NUMERIC_CLAMPS = {
     "batch_size": (1, 20),

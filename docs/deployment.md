@@ -175,8 +175,12 @@ curl -X POST http://127.0.0.1:9880/v1/audio/speech \
 ```
 
 `GET /v1/models` 返回固定模型 `chii-tts`；`voice` 当前仅 `chii`；`response_format` 支持
-`wav`/`aac`/`opus`，默认 `wav`。`wav` 为流式输出（边合成边推流，首字延迟低；多句文本
+`wav`/`aac`/`opus`，默认 `wav`（`opus` 映射到引擎 `media_type=ogg`，引擎写 ogg 时未指定 subtype，
+libsndfile 默认编码为 Vorbis，故是 Ogg/Vorbis 而非 Opus）。`wav` 为流式输出（边合成边推流，首字延迟低；多句文本
 由门面按句串行合成，见第 3 节加固说明）；`aac`/`opus` 为合成完成后一次性返回。
+`wav` 流式另支持 query 开关 `?stream=1`（`POST /v1/audio/speech?stream=1`）：改走「整句缓冲 + 逐句 RMS
+响度归一」路径，句间响度更一致、音量只增不减——默认路径不做响度归一，两条路径听感响度可能不同；代价是每句
+须等整句合成完才下发（首块只含 WAV 头且其余句子皆空流时该路径返回 200 空 body 而非 502，因状态行先于 body 发出）。
 
 ```bash
 # 深度健康检查 (真实合成探测, 结果缓存 30s; 异常时 503)

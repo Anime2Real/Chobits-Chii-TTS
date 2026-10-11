@@ -253,11 +253,16 @@ bash tools/start_tts_api.sh 9880
 TLS 由 Caddy 在 443 终结（门面绑回环），unit / env 示例与验证步骤见 **[docs/deployment.md](docs/deployment.md)**。
 
 OpenAI TTS 兼容调用（推荐；在服务器本机验证用 `http://127.0.0.1:9880/v1`；公网由 Caddy 443 →
-垫片转发到门面，客户端 `baseUrl` 填 `https://<服务器IP>/chobits/v1`，见 docs/deployment.md。
+垫片转发到门面，客户端 `baseUrl` 填 `https://<服务器IP>/chobits/v1`，见 docs/deployment.md）。
 `GET /v1/models` 返回固定模型 `chii-tts`，`voice` 当前仅 `chii`，`response_format` 支持
-`wav`/`aac`/`opus`，默认 `wav`。`wav` 为流式输出（边合成边推流，首字延迟低；多句文本
+`wav`/`aac`/`opus`，默认 `wav`（`opus` 映射到引擎的 `media_type=ogg`，而引擎写 ogg 时未指定
+subtype，libsndfile 默认编码为 Vorbis，即拿到的是 Ogg/Vorbis 而非 Opus）。`wav` 为流式输出（边合成边推流，首字延迟低；多句文本
 由门面按句串行合成并合并 PCM 流，规避引擎流式模式多片段并行批推理会截断音频的 bug，
-且上游在产出音频前失败时返回 502 而非 200 空流）；`aac`/`opus` 为合成完成后一次性返回）：
+且上游在产出音频前失败时返回 502 而非 200 空流）；`aac`/`opus` 为合成完成后一次性返回。
+`wav` 流式另有一个 query 开关 `?stream=1`（即 `POST /v1/audio/speech?stream=1`）：改走「整句缓冲后
+逐句 RMS 响度归一」路径，句间响度更一致、音量只增不减（默认路径不做响度归一，音量原样跟随引擎，
+故两条路径听感响度可能不同），代价是每句要等整句合成完才下发；若首块只含 WAV 头且其余句子
+皆空流，该路径返回 200 空 body 而非 502（状态行先于 body 发出，无法追改）：
 
 ```bash
 curl -X POST http://127.0.0.1:9880/v1/audio/speech \
