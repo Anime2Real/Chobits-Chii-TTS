@@ -29,7 +29,7 @@ DEFAULT_DST = Path(__file__).resolve().parent.parent / "data"
 LATIN_RE = re.compile(r"[A-Za-zЀ-ӿÀ-ɏ]")
 REPEAT_RE = re.compile(r"(.)\1{7,}")  # 同一字符 >= 8 连
 KANA_RE = re.compile(r"[぀-ヿ]")  # 平假名或片假名
-STRIP_CHARS = " \t?!?!…。、"
+STRIP_CHARS = " \t?!？！…。、"  # 半角与全角都要列全: decide() 先 normalize() 转全角
 
 
 def text_dirty(text: str) -> str | None:
