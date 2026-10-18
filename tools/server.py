@@ -257,7 +257,13 @@ _KANA_RE = re.compile(r"[ぁ-んァ-ヶー]")
 _HAN_RE = re.compile(r"[一-鿿]")
 
 
-def _text_lang_for(text: str) -> str:
+# 客户端可显式带 language（OpenAI 扩展字段），优先级：客户端指定 > env 钉死 > 判定
+_CLIENT_LANGS = {"auto", "zh", "ja", "en", "yue", "ko", "auto_yue"}
+
+
+def _text_lang_for(text: str, client_lang: str = "") -> str:
+    if client_lang in _CLIENT_LANGS:
+        return client_lang
     if TEXT_LANG_PIN:
         return TEXT_LANG_PIN
     kana = len(_KANA_RE.findall(text))
@@ -607,6 +613,9 @@ async def openai_audio_speech(request: Request):
     text = str(body.get("input") or "").strip()
     if not text:
         return _openai_error(400, "input 不能为空")
+    # OpenAI 扩展字段 language：客户端已知会话语言时显式指定（zh/ja/en/auto...），
+    # 避免服务端误判（首句误判会污染整段）；非法值按未提供处理（落判定路径）
+    client_lang = str(body.get("language") or "").strip().lower()
     if len(text) > MAX_TEXT_CHARS:
         return _openai_error(400, f"input 超长（上限 {MAX_TEXT_CHARS} 字符）")
     voice = str(body.get("voice") or "chii")
@@ -625,7 +634,7 @@ async def openai_audio_speech(request: Request):
     # aac/opus 逐块编码会拼出损坏帧, 保持非流式一次性返回 (此时批推理生效)
     payload = {
         "text": text,
-        "text_lang": _text_lang_for(text),
+        "text_lang": _text_lang_for(text, client_lang),
         "text_split_method": SPLIT_METHOD,
         "fragment_interval": FRAGMENT_INTERVAL,
         "ref_audio_path": v["ref_audio_path"],
