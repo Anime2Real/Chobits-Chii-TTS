@@ -645,6 +645,9 @@ async def openai_audio_speech(request: Request):
         "media_type": FORMAT_MAP[fmt],
         "speed_factor": float(speed),
         "batch_size": BATCH_SIZE,
+        # 非流式（aac/opus）开并行批推理：4090 实测 2.7x（3.0s→1.1s）；
+        # 流式路径保持关闭（流式+batch>1 会触发引擎截断 bug，门面已按句串行规避）
+        **({"parallel_infer": True} if FORMAT_MAP[fmt] != "wav" else {}),
         "streaming_mode": 2 if FORMAT_MAP[fmt] == "wav" else False,
     }
     # 全局在途并发上限：超上限排队等待空位，QUEUE_TIMEOUT 秒内仍拿不到才 429；
