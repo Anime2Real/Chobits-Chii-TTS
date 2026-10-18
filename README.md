@@ -14,8 +14,9 @@
 
 > 💖 如果这个项目对你有帮助，欢迎在 [GitHub](https://github.com/Anime2Real/Chobits-Chii-TTS) 点个 Star —— 你的支持能让更多人发现小叽！
 
-> 🌿 本分支（`cosy-voice`）是 **CosyVoice3 方案**（验证通过，待上线）。仓库 `main` 分支为[分支索引](https://github.com/Anime2Real/Chobits-Chii-TTS)；
-> GPT-SoVITS 生产方案（当前线上服务）见 [`gpt-sovits`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/gpt-sovits) 分支。
+> 🌿 本分支（`cosy-voice`）是 **CosyVoice3 方案**（**已上线**：2026-10-18 起 baremetal-uv 形态生产切换，
+> 引擎经 `CHII_TTS_ENGINE_URL` 与门面并存/回退约定接入，部署细节见部署侧运维记录）。仓库 `main` 分支为[分支索引](https://github.com/Anime2Real/Chobits-Chii-TTS)；
+> GPT-SoVITS 生产方案（前一版线上服务，保留回退）见 [`gpt-sovits`](https://github.com/Anime2Real/Chobits-Chii-TTS/tree/gpt-sovits) 分支。
 
 > ✅ CosyVoice 方案已验证通过：zero-shot 基线与 21 分钟数据 SFT 微调均在 RTX 4090 实测跑通，
 > 人工试听选定 **SFT 微调版**为正式路线；引擎容器与门面端到端联调完成。

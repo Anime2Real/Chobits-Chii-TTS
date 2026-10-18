@@ -140,10 +140,23 @@ def _handle_tts(params):
     streaming = _is_streaming(params.get('streaming_mode'))
 
     # 日语前端: text/prompt_text 假名化 + instruct 前缀 (与 SFT 训练序列一致)
-    tts_text = to_katakana(text)
+    # 假名化只针对日语: 显式 text_lang=zh* 或自动模式下「含汉字但零假名」判定为中文，
+    # 原文透传给 contains_chinese 路由中文前端——否则中文被 pyopenjtalk 按日文音读
+    # （实测「你好，我是小叽」-> ワガ ゼ ショー），是错误前端。prompt_text 固定为日语
+    # 参考文本，恒假名化。裸跑与容器形态同款逻辑（2026-10-18 baremetal-uv 生产实测验证）
+    lang = str(params.get('text_lang') or '').strip().lower()
+    if lang.startswith('zh'):
+        need_kana = False
+    elif lang.startswith('ja'):
+        need_kana = True
+    else:
+        _kana = sum(1 for c in text if 'ぁ' <= c <= 'ん' or 'ァ' <= c <= 'ン')
+        _hanzi = sum(1 for c in text if '一' <= c <= '鿿')
+        need_kana = not (_hanzi > 0 and _kana == 0)
+    tts_text = to_katakana(text) if need_kana else text
     prompt_full = INSTRUCT_PREFIX + to_katakana(prompt_text)
-    log.info('[tts] text=%s -> %s | stream=%s speed=%.2f media=%s',
-             text[:30], tts_text[:50], streaming, speed, media_type)
+    log.info('[tts] text=%s -> %s (kana=%s) | stream=%s speed=%.2f media=%s',
+             text[:30], tts_text[:50], need_kana, streaming, speed, media_type)
 
     gen = _pcm_stream(tts_text, prompt_full, ref_audio_path, speed)
     try:
