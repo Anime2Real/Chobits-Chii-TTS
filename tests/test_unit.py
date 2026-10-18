@@ -380,17 +380,19 @@ def test_ref_audio_local_dir_not_a_file_rejected(monkeypatch, tmp_path):
 
 def test_ref_audio_local_symlink_escape_rejected(monkeypatch, tmp_path):
     # 前缀内符号链接指向外部文件: 字面上在前缀内, realpath 复核须拒绝
-    outside = tmp_path / "outside.wav"
+    prefix = tmp_path / "prefix"
+    prefix.mkdir()
+    outside = tmp_path / "outside.wav"  # 与前缀平级, realpath 落出前缀
     outside.write_bytes(b"x")
-    link = tmp_path / "link.wav"
+    link = prefix / "link.wav"
     try:
         os.symlink(str(outside), str(link))
     except (OSError, NotImplementedError):
         pytest.skip("当前环境无法创建符号链接 (Windows 需开发者模式/管理员)")
-    monkeypatch.setattr(server, "REF_AUDIO_PREFIX", str(tmp_path))
+    monkeypatch.setattr(server, "REF_AUDIO_PREFIX", str(prefix))
     assert not server._ref_audio_path_allowed(str(link))
     # 真实文件仍放行, 复核不误伤
-    real = tmp_path / "real.wav"
+    real = prefix / "real.wav"
     real.write_bytes(b"x")
     assert server._ref_audio_path_allowed(str(real))
 
