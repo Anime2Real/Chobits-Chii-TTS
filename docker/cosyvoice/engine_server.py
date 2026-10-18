@@ -59,6 +59,13 @@ def get_model():
         log.info('loading model: %s', MODEL_DIR)
         _model = AutoModel(model_dir=MODEL_DIR, fp16=torch.cuda.is_available())
         SAMPLE_RATE = _model.sample_rate
+        # 流式首块调优：token_min_hop_len 默认 2×frame_rate（≈2s 音频才出首块），
+        # 降到 COSY_TOKEN_MIN_HOP_S 秒（默认 1s）让流式首包提前；0 = 保持引擎默认
+        hop_s = float(os.environ.get('COSY_TOKEN_MIN_HOP_S', '1'))
+        if hop_s > 0:
+            fr = _model.model.flow.input_frame_rate
+            _model.model.token_min_hop_len = max(1, int(hop_s * fr))
+            log.info('token_min_hop_len -> %d (%.1fs of audio)', _model.model.token_min_hop_len, hop_s)
         log.info('model loaded, sample_rate=%d, cuda=%s', SAMPLE_RATE, torch.cuda.is_available())
     return _model
 
