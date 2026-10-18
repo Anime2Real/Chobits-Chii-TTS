@@ -249,7 +249,29 @@ TTS_MODEL = "chii-tts"
 # subtype —— libsndfile 的 Ogg 默认编码是 Vorbis, 故容器是 Ogg、编码并非 Opus
 FORMAT_MAP = {"wav": "wav", "aac": "aac", "opus": "ogg"}
 # OpenAI TTS 协议不传语言: 钉死 auto (引擎为 v2Pro, 语言列表含 auto)
-TEXT_LANG = "auto"
+# OpenAI TTS 协议不传语言。CHII_TTS_TEXT_LANG 可钉死（如 ja）；缺省按整请求文本
+# 一次性判定主导语言——引擎 auto 是逐片段检测，中日混排时相邻片段可能落到不同
+# 语种（听起来忽中忽日）；假名占比≥汉字 1/2 判 ja，否则 zh；无中日文字回退 auto。
+TEXT_LANG_PIN = _getenv("TEXT_LANG", "")
+_KANA_RE = re.compile(r"[ぁ-んァ-ヶー]")
+_HAN_RE = re.compile(r"[一-鿿]")
+
+
+def _text_lang_for(text: str) -> str:
+    if TEXT_LANG_PIN:
+        return TEXT_LANG_PIN
+    kana = len(_KANA_RE.findall(text))
+    han = len(_HAN_RE.findall(text))
+    if not kana and not han:
+        return "auto"
+    return "ja" if kana * 2 >= han else "zh"
+
+
+# 断句/停顿：引擎默认 cut5（每个标点都切成片段）+ fragment_interval 0.3s，
+# 片段边界静音约 0.6s 听感断续；cut1 凑四句一切 + 0.05s 停顿实测更顺
+# （边界静音降至 ~0.3s，短回复通常单片段无边界）。env 可覆盖回旧值。
+SPLIT_METHOD = _getenv("SPLIT_METHOD", "cut1")
+FRAGMENT_INTERVAL = _getenv_float("FRAGMENT_INTERVAL", 0.05)
 
 # --- wav 流式按句串行化 ---------------------------------------------------
 # 引擎流式 (streaming_mode=2) 模式下, 多句文本触发内部并行批推理的
@@ -454,7 +476,7 @@ async def _probe_engine() -> dict:
     v = VOICES["chii"]
     payload = {
         "text": "テスト",
-        "text_lang": TEXT_LANG,
+        "text_lang": _text_lang_for("テスト"),
         "ref_audio_path": v["ref_audio_path"],
         "prompt_text": v["prompt_text"],
         "prompt_lang": v["prompt_lang"],
@@ -603,7 +625,9 @@ async def openai_audio_speech(request: Request):
     # aac/opus 逐块编码会拼出损坏帧, 保持非流式一次性返回 (此时批推理生效)
     payload = {
         "text": text,
-        "text_lang": TEXT_LANG,
+        "text_lang": _text_lang_for(text),
+        "text_split_method": SPLIT_METHOD,
+        "fragment_interval": FRAGMENT_INTERVAL,
         "ref_audio_path": v["ref_audio_path"],
         "prompt_text": v["prompt_text"],
         "prompt_lang": v["prompt_lang"],
