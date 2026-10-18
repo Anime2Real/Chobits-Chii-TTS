@@ -257,15 +257,17 @@ _KANA_RE = re.compile(r"[ぁ-んァ-ヶー]")
 _HAN_RE = re.compile(r"[一-鿿]")
 
 
-# 客户端可显式带 language（OpenAI 扩展字段），优先级：客户端指定 > env 钉死 > 判定
+# 客户端可显式带 language（OpenAI 扩展字段）。优先级：env 钉死 > 客户端指定 > 判定
+# ——钉死是运营者的声线策略（chii 声线只出日语），须压过客户端降级路径
+# （翻译失败时客户端会把 language 改成检测出的源语言，恰好是泄漏点）
 _CLIENT_LANGS = {"auto", "zh", "ja", "en", "yue", "ko", "auto_yue"}
 
 
 def _text_lang_for(text: str, client_lang: str = "") -> str:
-    if client_lang in _CLIENT_LANGS:
-        return client_lang
     if TEXT_LANG_PIN:
         return TEXT_LANG_PIN
+    if client_lang in _CLIENT_LANGS:
+        return client_lang
     kana = len(_KANA_RE.findall(text))
     han = len(_HAN_RE.findall(text))
     if not kana and not han:
