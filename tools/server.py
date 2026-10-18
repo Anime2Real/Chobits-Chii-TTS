@@ -280,6 +280,9 @@ def _text_lang_for(text: str, client_lang: str = "") -> str:
 # （边界静音降至 ~0.3s，短回复通常单片段无边界）。env 可覆盖回旧值。
 SPLIT_METHOD = _getenv("SPLIT_METHOD", "cut1")
 FRAGMENT_INTERVAL = _getenv_float("FRAGMENT_INTERVAL", 0.05)
+# 引擎类型：gpt-sovits（默认）/ cosy（CosyVoice3）。cosy 原生 token 级流式，
+# 无 GPT-SoVITS 流式截断 bug——wav 流式整句直通，跳过按句串行合并
+ENGINE_KIND = _getenv("ENGINE_KIND", "gpt-sovits")
 
 # --- wav 流式按句串行化 ---------------------------------------------------
 # 引擎流式 (streaming_mode=2) 模式下, 多句文本触发内部并行批推理的
@@ -661,6 +664,35 @@ async def openai_audio_speech(request: Request):
     try:
         if FORMAT_MAP[fmt] != "wav":
             return _hold_through_response(await _proxy_to_engine("POST", json=payload), hold)
+        if ENGINE_KIND == "cosy":
+            # CosyVoice3 原生 token 级流式、无多片段批推理 bug：整句直通，
+            # 不按句切分——首包更快、长句无句间拼接缝。剔除 GPT-SoVITS 专属参数
+            # （batch_size/text_split_method/fragment_interval），cosy shim 白名单
+            # 对多余参数本就忽略，剔除只是让语义干净
+            cosy_payload = {k: v for k, v in payload.items()
+                            if k not in ("batch_size", "text_split_method", "fragment_interval")}
+            cosy_payload["streaming_mode"] = True
+            try:
+                first_state = await _engine_stream_first(cosy_payload)
+            except _EngineFailure as exc:
+                print(str(exc), file=sys.stderr)
+                return _hold_through_response(
+                    JSONResponse(status_code=exc.status, content={"message": "tts engine error"}), hold)
+            headers = {}
+            if ct := first_state[0].headers.get("content-type"):
+                headers["content-type"] = ct
+
+            async def _direct_stream():
+                upstream, it, first = first_state
+                try:
+                    yield first
+                    async for chunk in it:
+                        yield chunk
+                finally:
+                    await upstream.aclose()
+
+            return _hold_through_response(StreamingResponse(
+                _direct_stream(), status_code=200, headers=headers), hold)
         # wav 流式: 多句按句串行化合并 (规避引擎多片段并行批推理 bug, 见上方说明);
         # 切不出多句时整句直发, 请求文本与现状一致
         sentences = _split_sentences(text)
