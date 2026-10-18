@@ -296,6 +296,11 @@ curl -G http://127.0.0.1:9880/tts \
 `CHII_TTS_SSL_CERTFILE` / `CHII_TTS_SSL_KEYFILE`（同时设置时以 HTTPS 启动）；
 `CHII_TTS_REF_AUDIO` / `CHII_TTS_REF_TEXT_FILE`（覆盖 OpenAI 垫片 `chii` 音色的参考音频/参考文本路径，
 前者为容器内路径，后者为宿主机路径）；
+`CHII_TTS_TEXT_LANG`（钉死合成语言如 `ja`，优先级压过客户端 `language`；缺省按整请求文本判定主导语言——
+假名占比≥汉字半数判 ja，否则 zh，无中日文字回退 auto）；
+`CHII_TTS_SPLIT_METHOD` / `CHII_TTS_FRAGMENT_INTERVAL`（引擎切分方式与片段间停顿，默认 `cut1` / `0.05`s；
+引擎默认 cut5/0.3s 逗号级断续）；
+`CHII_TTS_ENGINE_KIND`（引擎类型，默认 `gpt-sovits`；`cosy` 时 wav 流式整句直通，跳过按句串行合并）；
 `CHII_TTS_DEEP_PROBE_TTL` / `CHII_TTS_DEEP_PROBE_TIMEOUT`（深度健康检查结果缓存秒数 / 探测超时秒数，默认 30 / 20）。
 
 健康检查：`GET /healthz` 为免鉴权浅探活（进程级，不触引擎、不暴露指纹）；`GET /healthz/deep` 为深度检查——用极短文本向引擎

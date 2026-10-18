@@ -88,6 +88,10 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 | `CHII_TTS_REF_AUDIO` | `/data/models/ref_audio.wav` | OpenAI 垫片 `chii` 音色的参考音频（**引擎容器内**路径） |
 | `CHII_TTS_REF_AUDIO_PREFIX` | `/data/` | `/tts` 透传的 ref_audio 路径前缀约束（防容器内任意路径探测） |
 | `CHII_TTS_REF_TEXT_FILE` | `models/ref_text.txt` | 参考文本（门面**宿主机**路径，读出后内联传给引擎） |
+| `CHII_TTS_TEXT_LANG` | （空） | 钉死合成语言（如 `ja`），优先级最高（压过客户端 `language` 扩展字段）；缺省按整请求文本判定主导语言（假名占比≥汉字半数→ja，否则 zh，无中日文字回退 auto） |
+| `CHII_TTS_SPLIT_METHOD` | `cut1` | 引擎切分方式：cut1 凑四句一切（默认）；cut5 逐标点切会在逗号处产生断点、听感断续 |
+| `CHII_TTS_FRAGMENT_INTERVAL` | `0.05` | 片段间停顿秒数（引擎默认 0.3，偏大） |
+| `CHII_TTS_ENGINE_KIND` | `gpt-sovits` | 引擎类型：`gpt-sovits`（默认）/ `cosy`（CosyVoice3 原生 token 级流式，wav 流式整句直通、跳过按句串行合并） |
 | `CHII_TTS_SSL_CERTFILE` / `CHII_TTS_SSL_KEYFILE` | （空） | 同时设置时以 HTTPS 启动 |
 | `CHII_TTS_DEEP_PROBE_TTL` | `30` | `/healthz/deep` 探测结果缓存秒数（防高频探测烧 GPU） |
 | `CHII_TTS_DEEP_PROBE_TIMEOUT` | `20` | `/healthz/deep` 单次真实合成探测的超时秒数 |
@@ -120,6 +124,15 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 > ③ 参考文本（`CHII_TTS_REF_TEXT_FILE`）缺失/为空不再静默置零样本：启动打 WARN 日志，
 > `/healthz/deep` 响应体新增 `ref_ready` 字段（状态码语义不变，引擎健康仍 200，
 > `ref_ready=false` 表示合成质量降质，运维据此告警）。
+
+> 2026-10-18 合成体验修正（此前只进了 env.example，本文档未同步，现表内补齐）：
+> ① 合成语言按整请求判定主导语种——引擎 auto 是逐片段检测，中日混排会忽中忽日；
+> 假名占比≥汉字半数判 ja，否则 zh，无中日文字回退 auto；② `CHII_TTS_TEXT_LANG` 可钉死
+> 且优先级最高（压过客户端 `language` 扩展字段——客户端翻译降级时会把 language 改成
+> 源语言，恰是语种泄漏点）；③ 默认切分 `cut1` + `fragment_interval` 0.05s（引擎默认
+> cut5/0.3s 逗号级断续，实测边界静音 ~0.6s→~0.3s）；④ 非流式 aac/opus 路径开
+> `parallel_infer`（4090 实测提速 27%，流式保持串行不变）；⑤ 新增 `CHII_TTS_ENGINE_KIND`
+> （`cosy` 时 wav 流式整句直通，CosyVoice3 原生流式无 GPT-SoVITS 截断 bug）。
 
 ## 4. systemd 守护（生产）
 

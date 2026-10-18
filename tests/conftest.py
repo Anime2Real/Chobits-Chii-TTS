@@ -21,15 +21,19 @@ API_KEY = os.environ["CHII_TTS_API_KEY"]
 
 @pytest.fixture(autouse=True)
 def reset_global_state():
-    """每个测试隔离模块级全局状态（限流桶 / 在途信号量）。
+    """每个测试隔离模块级全局状态（限流桶 / 在途信号量 / 深探测缓存）。
 
-    信号量置 None 让端点在运行中的事件循环里重建（Python 3.8 的
-    asyncio.Semaphore 创建即绑定 loop，跨 TestClient 复用会绑错 loop）。"""
+    信号量与深探测锁置 None 让端点在运行中的事件循环里重建（asyncio 同步原语
+    首次使用时绑定所在 loop，跨 TestClient/asyncio.run 复用会报错）。"""
     server._rate_limiter.clear()
     server._inflight_sem = None
+    server._deep_probe_lock = None
+    server._deep_probe.update({"at": 0.0, "status": "degraded", "engine": "not probed yet"})
     yield
     server._rate_limiter.clear()
     server._inflight_sem = None
+    server._deep_probe_lock = None
+    server._deep_probe.update({"at": 0.0, "status": "degraded", "engine": "not probed yet"})
 
 
 @pytest.fixture

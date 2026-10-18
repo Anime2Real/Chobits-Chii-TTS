@@ -397,6 +397,86 @@ def test_ref_audio_local_symlink_escape_rejected(monkeypatch, tmp_path):
     assert server._ref_audio_path_allowed(str(real))
 
 
+# --- /healthz/deep 深探测 single-flight ------------------------------------------------
+
+class _CountingEngine:
+    """计数 + 可延迟的引擎替身：_probe_engine 只调 post，返回类响应对象即可。"""
+
+    def __init__(self, delay=0.0):
+        self.requests = 0
+        self._delay = delay
+
+    async def post(self, url, **kwargs):
+        self.requests += 1
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        return SimpleNamespace(status_code=200, content=b"fake-wav")
+
+
+def test_healthz_deep_concurrent_probes_single_flight():
+    """缓存过期瞬间的并发深探测：至多一次真实合成（single-flight 回归）。"""
+    async def run():
+        engine = _CountingEngine(delay=0.05)  # 延迟放大「等锁期间缓存被刷新」窗口
+        old_client = server._client
+        server._client = engine
+        try:
+            await asyncio.gather(server.healthz_deep(),
+                                 server.healthz_deep(),
+                                 server.healthz_deep())
+        finally:
+            server._client = old_client
+        return engine.requests
+
+    assert asyncio.run(run()) == 1
+    assert server._deep_probe["status"] == "ok"
+
+
+def test_healthz_deep_probe_in_flight_returns_stale_cache():
+    """探测在途（锁被持）时进来的请求直接用缓存结果，不触发第二次合成。"""
+    async def run():
+        server._deep_probe_lock = asyncio.Lock()
+        await server._deep_probe_lock.acquire()  # 模拟探测在途
+        server._deep_probe.update({"at": 0.0, "status": "degraded", "engine": "stale"})
+        engine = _CountingEngine()
+        old_client = server._client
+        server._client = engine
+        try:
+            resp = await server.healthz_deep()
+        finally:
+            server._client = old_client
+            server._deep_probe_lock.release()
+        return engine.requests, resp
+
+    requests, resp = asyncio.run(run())
+    assert requests == 0
+    assert resp.status_code == 503  # 过期缓存原样回（可能是初值/上次 degraded）
+
+
+# --- _gain_pcm（逐句 RMS 响度归一，纯函数） ------------------------------------------------
+
+def test_gain_pcm_silent_unchanged():
+    import array
+    pcm = array.array("h", [0] * 1000).tobytes()
+    assert server._gain_pcm(pcm) == pcm
+
+
+def test_gain_pcm_quiet_signal_amplified_below_cap():
+    import array
+    pcm = array.array("h", [500, -500] * 5000).tobytes()  # RMS=peak=500
+    out = server._gain_pcm(pcm)
+    o = array.array("h")
+    o.frombytes(out)
+    assert len(out) == len(pcm)
+    assert max(map(abs, o)) == 4000  # 增益封顶 max_gain=8.0
+    assert max(map(abs, o)) <= 31000  # 峰值不超过 peak_cap
+
+
+def test_gain_pcm_loud_signal_unchanged():
+    import array
+    pcm = array.array("h", [30000, -30000] * 5000).tobytes()  # g=min(...,0.17,1.03)<=1 不动
+    assert server._gain_pcm(pcm) == pcm
+
+
 # --- 参考文本缺失: 启动 WARN (不拒绝启动), /healthz/deep 带 ref_ready ------------
 
 def test_ref_text_missing_warns_at_startup_but_imports(tmp_path):

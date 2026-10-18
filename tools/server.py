@@ -15,7 +15,8 @@ OpenAI TTS 兼容垫片 (客户端 baseUrl 填 http(s)://<IP>:9880/v1):
     voice 映射引擎侧参考音频 (当前仅 "chii");
     response_format 支持 wav/aac/opus (默认 wav; mp3/flac/pcm 暂不支持, 返回 400;
     opus 走引擎 media_type=ogg, 即 Ogg/Vorbis 封装而非 Opus 编码);
-    speed (0.25~4.0) 映射 speed_factor; text_lang 由服务端钉死 auto,
+    speed (0.25~4.0) 映射 speed_factor; 合成语言按 TEXT_LANG 钉死 >
+    客户端 language 扩展字段 > 整请求文本判定三级优先级 (见 _text_lang_for),
     其余采样参数取引擎默认值. wav 为流式输出 (边合成边推流, 首字延迟低);
     aac/opus 为合成完成后一次性返回. query ?stream=1 时 wav 流式改走"整句缓冲 +
     逐句 RMS 响度归一"路径 (默认路径不做响度归一, 两者听感响度不同).
@@ -70,7 +71,7 @@ wav 流式路径的门面侧加固 (引擎流式模式多句并行批推理会�
                                      显式绑非回环地址须同时配 TLS, 否则拒绝启动)
 """
 
-from __future__ import annotations  # 宿主机 Python 3.8 (Ubuntu 20.04) 兼容
+from __future__ import annotations  # 宿主 Python 3.10+；本 import 惰性化注解求值
 
 import asyncio
 import json
@@ -150,8 +151,9 @@ _rate_limiter = SlidingWindowRateLimiter(RATE_LIMIT)
 # 单请求成本（长文本独占 GPU 数分钟）；并发控制在端点层执行而非中间件——
 # BaseHTTPMiddleware 的 call_next 拿到响应头即返回，流式合成数分钟的 GPU 占用
 # 会落在信号量外，上限名存实亡。
-# Python 3.8 的 asyncio.Semaphore 创建时即绑定事件循环，模块级创建会绑错 loop，
-# 故在 startup 钩子（运行中的 loop 内）初始化；端点里保留防御性懒创建兜底
+# asyncio.Semaphore 首次使用时绑定所在事件循环，跨 loop 复用会报错（每个测试 /
+# TestClient 各跑独立 loop），故在 startup 钩子（运行中的 loop 内）初始化；
+# 端点里保留防御性懒创建兜底
 _inflight_sem: asyncio.Semaphore | None = None
 
 
@@ -163,7 +165,7 @@ async def _init_inflight_sem():
 
 @APP.on_event("startup")
 async def _init_deep_probe_lock():
-    # 同 _inflight_sem：asyncio.Lock 在 Python 3.8 上创建即绑 loop，须在运行中的 loop 内建
+    # 同 _inflight_sem：asyncio.Lock 使用时绑定所在事件循环，须在运行中的 loop 内建
     global _deep_probe_lock
     _deep_probe_lock = asyncio.Lock()
 
@@ -248,7 +250,6 @@ TTS_MODEL = "chii-tts"
 # "opus" 映射到引擎 media_type=ogg, 而引擎以 sf.SoundFile(format="ogg") 写文件且未指定
 # subtype —— libsndfile 的 Ogg 默认编码是 Vorbis, 故容器是 Ogg、编码并非 Opus
 FORMAT_MAP = {"wav": "wav", "aac": "aac", "opus": "ogg"}
-# OpenAI TTS 协议不传语言: 钉死 auto (引擎为 v2Pro, 语言列表含 auto)
 # OpenAI TTS 协议不传语言。CHII_TTS_TEXT_LANG 可钉死（如 ja）；缺省按整请求文本
 # 一次性判定主导语言——引擎 auto 是逐片段检测，中日混排时相邻片段可能落到不同
 # 语种（听起来忽中忽日）；假名占比≥汉字 1/2 判 ja，否则 zh；无中日文字回退 auto。
@@ -361,7 +362,7 @@ def _parse_wav_fmt(head: bytes):
 
 
 def _stream_wav_header(rate: int, channels: int, sampwidth: int = 2) -> bytes:
-    """流式 WAV 头: RIFF/data 长度置 0xFFFFFFFF（ indefinit 约定），
+    """流式 WAV 头: RIFF/data 长度置 0xFFFFFFFF（indefinite 约定），
     供流式客户端取 fmt；严格按头解析整包长度的客户端不应收到本模式."""
     byte_rate = rate * channels * sampwidth
     block_align = channels * sampwidth
@@ -383,10 +384,16 @@ def _gain_pcm(pcm: bytes, target_rms: int = 5200, peak_cap: int = 31000, max_gai
         return pcm
     a = array.array("h")
     a.frombytes(pcm)
-    peak = max(map(abs, a))
+    peak = 0
+    sum_sq = 0
+    for s in a:  # 单趟同时累计峰值与能量（max() 与 sum() 双扫约两倍开销）
+        p = abs(s)
+        if p > peak:
+            peak = p
+        sum_sq += s * s
     if peak == 0:
         return pcm
-    rms = (sum(s * s for s in a) / len(a)) ** 0.5
+    rms = (sum_sq / len(a)) ** 0.5
     g = min(max_gain, target_rms / rms, peak_cap / peak)
     if g <= 1.0:
         return pcm
@@ -477,8 +484,10 @@ DEEP_PROBE_TIMEOUT = _getenv_float("DEEP_PROBE_TIMEOUT", 20.0)
 _deep_probe: dict = {"at": 0.0, "status": "degraded", "engine": "not probed yet"}
 # single-flight：探测在途期间并发进来的监控请求直接回缓存结果（不排队等待，
 # 首探尚未完成时回的是上一次缓存值，可能是初值 degraded）。深探测既不在限流路径内
-# （中间件 limited_path 只含 /tts 与 /v1/audio/speech）、也不占在途信号量，
-# 不加这道锁时 N 个并发监控请求就是 N 次 GPU 合成
+# （中间件 limited_path 只含 /tts 与 /v1/audio/speech）、也不占在途信号量。
+# 外层「过期且锁空闲」判断与拿锁之间无 await（单事件循环内原子），但进锁后仍二次
+# 校验 TTL（对齐 ASR 门面 healthz_deep）——防未来重构在两步之间插入 await 后，
+# 缓存过期瞬间的并发监控请求在锁内串行各探一次，退化为 N 次 GPU 合成
 _deep_probe_lock: asyncio.Lock | None = None
 
 
@@ -516,13 +525,16 @@ async def healthz_deep():
     global _deep_probe_lock
     if _deep_probe_lock is None:  # 防御兜底（同 _acquire_inflight）：协程内创建，绑当前 loop
         _deep_probe_lock = asyncio.Lock()
-    if (time.time() - _deep_probe["at"] >= DEEP_PROBE_TTL
-            and not _deep_probe_lock.locked()):  # 探测在途：直接用缓存结果，不再触发一次合成
-        async with _deep_probe_lock:
-            result = await _probe_engine()
-            _deep_probe.update(result, at=time.time())
-            if result["status"] != "ok":
-                print(f"[healthz] deep probe degraded: {result['engine']}", file=sys.stderr)
+    if time.time() - _deep_probe["at"] >= DEEP_PROBE_TTL:
+        # 探测在途（锁被持）：直接用缓存结果（可能是过期值，防监控在探测窗口内抖 503）
+        if not _deep_probe_lock.locked():
+            async with _deep_probe_lock:
+                # 二次校验 TTL：等锁期间可能已被先前进来的请求刷新（见上方 single-flight 注释）
+                if time.time() - _deep_probe["at"] >= DEEP_PROBE_TTL:
+                    result = await _probe_engine()
+                    _deep_probe.update(result, at=time.time())
+                    if result["status"] != "ok":
+                        print(f"[healthz] deep probe degraded: {result['engine']}", file=sys.stderr)
     # ref_ready 不进状态码：参考文本缺失/为空是降质而非变砖，引擎健康仍回 200，
     # 避免惊动监控；运维应盯 ref_ready=false 的告警（启动时门面已打 WARN 日志）
     return JSONResponse(
@@ -754,8 +766,8 @@ TTS_ALLOWED_KEYS = {
     "text", "text_lang", "prompt_text", "prompt_lang", "media_type",
     "speed_factor", "streaming_mode", "text_split_method", "fragment_interval",
     "seed", "top_k", "top_p", "temperature", "repetition_penalty",
-    "batch_size", "batch_threshold", "split_bucket", "return_fragment",
-    "fixed_length_chunk", "parallel_infer", "sample_steps", "super_sampling",
+    "batch_size", "batch_threshold", "split_bucket",
+    "parallel_infer", "sample_steps", "super_sampling",
 }
 # 与引擎 api_v2 的 media_type 白名单对齐（wav/raw/ogg/aac）：mp3/flac/pcm 引擎不接受，
 # 门面放行只会得到引擎 400；raw 为无容器裸 PCM，引擎支持
