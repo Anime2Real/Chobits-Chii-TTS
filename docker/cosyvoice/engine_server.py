@@ -33,6 +33,11 @@ ENGINE_PORT = int(os.environ.get('ENGINE_PORT', '9880'))
 INSTRUCT_PREFIX = 'You are a helpful assistant.<|endofprompt|>'
 DEFAULT_REF_AUDIO = '/data/models/ref_audio.wav'
 SAMPLE_RATE = 24000  # Fun-CosyVoice3-0.5B 固定 24kHz, 加载后以模型实测值校准
+# 输出采样率：门面/客户端实时播放管线按 GPT-SoVITS 约定硬编码 32kHz
+#（Mascot gpt-sovits.ts OUTPUT_SAMPLE_RATE=32000），24kHz 直接发会被 1.33x
+# 变速变调播放——统一重采样到 32kHz 出站（torchaudio 在 venv 内）
+OUTPUT_RATE = int(os.environ.get('COSY_OUTPUT_RATE', '32000'))
+_resampler = None
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger('cosyvoice-engine')
@@ -71,24 +76,30 @@ def get_model():
 
 
 def _to_pcm16(tts_speech):
-    """模型输出 float tensor (1, T) [-1,1] -> s16le 裸 PCM 字节"""
+    """模型输出 float tensor (1, T) [-1,1] @24kHz -> 重采样 32kHz -> s16le 裸 PCM"""
+    global _resampler
+    if OUTPUT_RATE != SAMPLE_RATE:
+        if _resampler is None:
+            import torchaudio
+            _resampler = torchaudio.transforms.Resample(SAMPLE_RATE, OUTPUT_RATE)
+        tts_speech = _resampler(tts_speech.float())
     pcm = torch.round(tts_speech.clamp(-1.0, 1.0) * 32767).to(torch.int16)
     return pcm.cpu().numpy().tobytes()
 
 
 def _wav_header(data_len):
     """完整 WAV 头 (非流式, 长度写实); data_len 为 PCM 字节数"""
-    byte_rate = SAMPLE_RATE * 2
+    byte_rate = OUTPUT_RATE * 2
     return (b'RIFF' + struct.pack('<I', 36 + data_len) + b'WAVE'
-            + b'fmt ' + struct.pack('<IHHIIHH', 16, 1, 1, SAMPLE_RATE, byte_rate, 2, 16)
+            + b'fmt ' + struct.pack('<IHHIIHH', 16, 1, 1, OUTPUT_RATE, byte_rate, 2, 16)
             + b'data' + struct.pack('<I', data_len))
 
 
 def _stream_wav_header():
     """流式 WAV 头: RIFF/data 长度置 0xFFFFFFFF (indefinite 约定), 与门面 _stream_wav_header 一致"""
-    byte_rate = SAMPLE_RATE * 2
+    byte_rate = OUTPUT_RATE * 2
     return (b'RIFF' + struct.pack('<I', 0xFFFFFFFF) + b'WAVE'
-            + b'fmt ' + struct.pack('<IHHIIHH', 16, 1, 1, SAMPLE_RATE, byte_rate, 2, 16)
+            + b'fmt ' + struct.pack('<IHHIIHH', 16, 1, 1, OUTPUT_RATE, byte_rate, 2, 16)
             + b'data' + struct.pack('<I', 0xFFFFFFFF))
 
 
@@ -104,7 +115,7 @@ def _encode_ffmpeg(pcm, media_type):
     """裸 PCM -> aac (adts) / ogg (libopus 封装), 容器内 ffmpeg 7"""
     codec, muxer = ('aac', 'adts') if media_type == 'aac' else ('libopus', 'ogg')
     cmd = ['ffmpeg', '-v', 'error',
-           '-f', 's16le', '-ar', str(SAMPLE_RATE), '-ac', '1', '-i', 'pipe:0',
+           '-f', 's16le', '-ar', str(OUTPUT_RATE), '-ac', '1', '-i', 'pipe:0',
            '-c:a', codec, '-f', muxer, 'pipe:1']
     proc = subprocess.run(cmd, input=pcm, capture_output=True)
     if proc.returncode != 0:
