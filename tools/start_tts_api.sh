@@ -3,7 +3,9 @@
 # 用法: bash tools/start_tts_api.sh [端口, 默认 9880]
 # 需要环境变量 CHII_TTS_API_KEY (systemd 从 /etc/chobits-chii-tts.env 读取);
 # 推理引擎在 Docker 容器里 (见 docs/deployment.md), 本脚本只起门面;
-# 首次运行自动在仓库根目录建 .venv 并安装共享库 + requirements.txt
+# 首次运行自动在仓库根目录建 .venv 并安装共享库 + requirements.txt;
+# 之后每次启动先验证关键 import (fastapi/httpx/uvicorn/chii_facade_common),
+# 缺失/损坏自动重装 (venv 存在 ≠ 依赖可用), 装不通拒绝启动
 set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,17 +37,47 @@ if [ ! -d "$COMMON_LIB" ]; then
     exit 1
 fi
 
-install_common_lib() {
-    "$VENV/bin/pip" install -e "$COMMON_LIB"
+# 门面实际依赖的关键 import：venv 目录存在 ≠ 依赖可用（首次 pip 失败后重启
+# 会带着半成品环境永远跳过安装），故以 import 验证为准，不可用则重装
+KEY_IMPORTS="fastapi, httpx, uvicorn, chii_facade_common"
+
+venv_imports_ok() {
+    "$VENV/bin/python" -c "import $KEY_IMPORTS" >/dev/null 2>&1
+}
+
+run_pip() {
+    # 生产 .venv 由 uv 创建、没有 pip 模块：优先 venv 自带 pip，退化为 uv pip
+    # （uv pip 子命令与 pip 一致，直接透传参数 + 指定目标解释器）
+    if [ -x "$VENV/bin/pip" ]; then
+        "$VENV/bin/pip" "$@"
+    else
+        uv pip "$@" -p "$VENV/bin/python"
+    fi
+}
+
+install_deps() {
+    # -e 共享库 + requirements.txt；chii_facade_common 在 requirements 之外，单独装
+    run_pip install -e "$COMMON_LIB"
+    run_pip install -r "$REPO_ROOT/requirements.txt"
 }
 
 if [ ! -d "$VENV" ]; then
     python3 -m venv "$VENV"
-    install_common_lib
-    "$VENV/bin/pip" install -r "$REPO_ROOT/requirements.txt"
-elif ! "$VENV/bin/python" -c "import chii_facade_common" >/dev/null 2>&1; then
-    # 旧 venv 补装共享库（共享库接入前已存在的门面环境）
-    install_common_lib
+fi
+if ! venv_imports_ok; then
+    install_deps
+fi
+if ! venv_imports_ok; then
+    # 装完仍不可用（如首次安装中途失败）→ 重试一次；再失败则明确报错退出，
+    # 而不是带着坏环境启动门面
+    echo "[warn] .venv 关键 import 验证失败（$KEY_IMPORTS），重试安装依赖" >&2
+    install_deps
+fi
+if ! venv_imports_ok; then
+    echo "[错误] .venv 依赖安装后关键 import 仍失败: $KEY_IMPORTS" >&2
+    echo "       请手动安装: uv pip install -p $VENV/bin/python -e $COMMON_LIB \\" >&2
+    echo "           && uv pip install -p $VENV/bin/python -r $REPO_ROOT/requirements.txt" >&2
+    exit 1
 fi
 
 exec "$VENV/bin/python" "$REPO_ROOT/tools/server.py" "$PORT"
