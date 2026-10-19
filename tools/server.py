@@ -262,12 +262,16 @@ _HAN_RE = re.compile(r"[一-鿿]")
 # ——钉死是运营者的声线策略（chii 声线只出日语），须压过客户端降级路径
 # （翻译失败时客户端会把 language 改成检测出的源语言，恰好是泄漏点）
 _CLIENT_LANGS = {"auto", "zh", "ja", "en", "yue", "ko", "auto_yue"}
+# cosy shim 的语言面只有 zh/ja（其余 text_lang 落 shim 内的自动判定分支，纯
+# en/ko/yue 文本会被 pyopenjtalk 按日文音读成乱码）：ENGINE_KIND=cosy 时收窄
+# 客户端白名单，en/ko/yue/auto_yue 按未提供处理、落回钉死/判定路径
+_COSY_CLIENT_LANGS = {"auto", "zh", "ja"}
 
 
 def _text_lang_for(text: str, client_lang: str = "") -> str:
     if TEXT_LANG_PIN:
         return TEXT_LANG_PIN
-    if client_lang in _CLIENT_LANGS:
+    if client_lang in (_COSY_CLIENT_LANGS if ENGINE_KIND == "cosy" else _CLIENT_LANGS):
         return client_lang
     kana = len(_KANA_RE.findall(text))
     han = len(_HAN_RE.findall(text))
