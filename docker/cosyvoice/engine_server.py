@@ -9,6 +9,7 @@
 # 启动: uvicorn engine_server:app --host 0.0.0.0 --port $ENGINE_PORT (见 entrypoint.sh)
 # 环境变量: MODEL_DIR (默认 /data/model), COSYVOICE_DIR (默认 /opt/CosyVoice),
 #           ENGINE_PORT (默认 9880, 仅供裸跑 python engine_server.py 时读取)
+import array
 import itertools
 import logging
 import os
@@ -75,6 +76,34 @@ def get_model():
     return _model
 
 
+# --- 响度归一（与门面 _gain_pcm 同参数：RMS 目标 ≈-16dBFS、峰值≤95%、只提不压） ---
+# cosy 原生流式绕过了门面的逐句归一（gpt-sovits 路径 ?stream=1 才有），
+# 归一下沉到引擎：非流式整包一次增益；流式逐块增益 + 跨块平滑（防泵浦效应）
+_TARGET_RMS = 5200
+_PEAK_CAP = 31000
+_MAX_GAIN = 8.0
+
+
+def _pcm_gain(pcm, gain):
+    if abs(gain - 1.0) < 0.01:
+        return pcm
+    a = array.array('h')
+    a.frombytes(pcm)
+    return array.array('h', (max(-32768, min(32767, int(round(x * gain)))) for x in a)).tobytes()
+
+
+def _desired_gain(pcm):
+    a = array.array('h')
+    a.frombytes(pcm[: len(pcm) // 2 * 2])
+    if not a:
+        return 1.0
+    peak = max(abs(x) for x in a)
+    if peak == 0:
+        return 1.0
+    rms = (sum(x * x for x in a) / len(a)) ** 0.5
+    return max(1.0, min(_MAX_GAIN, _TARGET_RMS / rms, _PEAK_CAP / peak))
+
+
 def _to_pcm16(tts_speech):
     """模型输出 float tensor (1, T) [-1,1] @24kHz -> 重采样 32kHz -> s16le 裸 PCM"""
     global _resampler
@@ -104,11 +133,14 @@ def _stream_wav_header():
 
 
 def _pcm_stream(tts_text, prompt_text, ref_audio_path, speed):
-    """持锁逐块生成裸 PCM (锁持有到流结束, 保证 GPU 推理串行)"""
+    """持锁逐块生成裸 PCM (锁持有到流结束, 保证 GPU 推理串行)，逐块响度归一（增益跨块平滑）"""
+    gain = 1.0
     with _gpu_lock:
         for out in get_model().inference_zero_shot(tts_text, prompt_text, ref_audio_path,
                                                    stream=True, speed=speed):
-            yield _to_pcm16(out['tts_speech'])
+            pcm = _to_pcm16(out['tts_speech'])
+            gain = 0.5 * gain + 0.5 * _desired_gain(pcm)
+            yield _pcm_gain(pcm, gain)
 
 
 def _encode_ffmpeg(pcm, media_type):
@@ -193,7 +225,7 @@ def _handle_tts(params):
             media_type='audio/wav')
 
     try:
-        pcm = first + b''.join(gen)
+        pcm = _pcm_gain(first + b''.join(gen), _desired_gain(first + b''.join(gen)))  # 非流式：整包一次归一
     except Exception as exc:
         log.exception('[tts] 推理失败')
         return _err(500, 'synthesis failed: %s' % exc.__class__.__name__)
