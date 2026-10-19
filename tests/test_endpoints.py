@@ -1,4 +1,6 @@
 """tools/server.py 端点级测试：TestClient + 内存假引擎（不触真实 :9882）。"""
+import asyncio
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -260,6 +262,40 @@ def test_speech_all_punctuation_400(client, fake_engine, text):
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "no_synthesizable_text"
     assert fake_engine.requests == []
+
+
+# --- 在途并发排队超时 429：OpenAI 协议侧 error 结构，/tts 透传侧保持 {"message"} ----
+
+def _jam_inflight(monkeypatch):
+    # 在途信号量换成 Semaphore(0)：后续请求排队必超时 → 429，不触引擎
+    monkeypatch.setattr(server, "QUEUE_TIMEOUT", 0.05)
+    server._inflight_sem = asyncio.Semaphore(0)
+
+
+def test_speech_queue_timeout_openai_error_shape(client, monkeypatch):
+    _jam_inflight(monkeypatch)
+    resp = client.post("/v1/audio/speech", json={"input": "hi", "voice": "chii"}, headers=AUTH)
+    assert resp.status_code == 429
+    # OpenAI 路径：标准 error 结构 + 稳定 code（此前回 {"message":...} 非协议形）
+    assert resp.json()["error"]["code"] == "queue_timeout"
+    assert resp.json()["error"]["message"] == "server busy, queue wait timeout"
+
+
+def test_speech_queue_timeout_wav_also_openai_shape(client, monkeypatch):
+    _jam_inflight(monkeypatch)
+    resp = client.post("/v1/audio/speech",
+                       json={"input": "テストです", "voice": "chii", "response_format": "wav"},
+                       headers=AUTH)
+    assert resp.status_code == 429
+    assert resp.json()["error"]["code"] == "queue_timeout"
+
+
+def test_tts_queue_timeout_keeps_message_shape(client, monkeypatch):
+    # /tts 透传侧保持 {"message"} 原样（原生 API 客户端按旧契约解析）
+    _jam_inflight(monkeypatch)
+    resp = client.get("/tts", params={"text": "hi"}, headers=AUTH)
+    assert resp.status_code == 429
+    assert resp.json() == {"message": "server busy, queue wait timeout"}
 
 
 # --- 请求体大小上限（413, 超限不触引擎） ----------------------------------------
