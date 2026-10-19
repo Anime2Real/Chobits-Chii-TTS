@@ -641,6 +641,11 @@ async def openai_audio_speech(request: Request):
     text = str(body.get("input") or "").strip()
     if not text:
         return _openai_error(400, "input 不能为空")
+    if not _split_sentences(text):
+        # 全标点/符号输入（_split_sentences 为空）此前会走到引擎 200 空流→门面 502；
+        # 这是客户端输入退化而非上游故障：直接 400、不触引擎，也不占在途信号量
+        return _openai_error(400, "input 不含可合成文本（纯标点/符号）",
+                             err_code="no_synthesizable_text")
     # OpenAI 扩展字段 language：客户端已知会话语言时显式指定（zh/ja/en/auto...），
     # 避免服务端误判（首句误判会污染整段）；非法值按未提供处理（落判定路径）
     client_lang = str(body.get("language") or "").strip().lower()

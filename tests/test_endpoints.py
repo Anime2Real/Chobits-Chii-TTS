@@ -251,6 +251,17 @@ def test_speech_validation_errors(client, fake_engine):
     assert fake_engine.requests == []  # 校验失败不触引擎
 
 
+@pytest.mark.parametrize("text", ["！！！", "。。。", "?!。", "…", "、，；", "「」【】"])
+def test_speech_all_punctuation_400(client, fake_engine, text):
+    # 全标点输入（_split_sentences 为空）：客户端输入退化而非上游故障——
+    # 直接 400（此前走到引擎 200 空流 → 门面 502），且不触引擎
+    resp = client.post("/v1/audio/speech",
+                       json={"input": text, "voice": "chii"}, headers=AUTH)
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "no_synthesizable_text"
+    assert fake_engine.requests == []
+
+
 # --- 请求体大小上限（413, 超限不触引擎） ----------------------------------------
 
 def test_speech_body_too_large_413(client, fake_engine, monkeypatch):
