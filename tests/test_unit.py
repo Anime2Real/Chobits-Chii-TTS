@@ -204,6 +204,39 @@ def test_sanitize_media_type_invalid():
     assert err is not None
 
 
+# --- _text_lang_for（合成语言三级优先级 + cosy 语言面收窄） -------------------------
+
+@pytest.mark.parametrize("lang", ["zh", "ja", "auto", "en", "yue", "ko", "auto_yue"])
+def test_text_lang_gpt_sovits_accepts_full_client_whitelist(monkeypatch, lang):
+    monkeypatch.setattr(server, "ENGINE_KIND", "gpt-sovits")
+    monkeypatch.setattr(server, "TEXT_LANG_PIN", "")
+    assert server._text_lang_for("whatever", lang) == lang
+
+
+@pytest.mark.parametrize("lang", ["zh", "ja", "auto"])
+def test_text_lang_cosy_accepts_subset(monkeypatch, lang):
+    monkeypatch.setattr(server, "ENGINE_KIND", "cosy")
+    monkeypatch.setattr(server, "TEXT_LANG_PIN", "")
+    assert server._text_lang_for("whatever", lang) == lang
+
+
+@pytest.mark.parametrize("lang", ["en", "ko", "yue", "auto_yue"])
+def test_text_lang_cosy_rejects_gpt_sovits_only_langs(monkeypatch, lang):
+    # cosy shim 对 en/ko/yue 只会按日文音读成乱码：不得透传，须落回判定路径
+    monkeypatch.setattr(server, "ENGINE_KIND", "cosy")
+    monkeypatch.setattr(server, "TEXT_LANG_PIN", "")
+    assert server._text_lang_for("テストです", lang) == "ja"      # 假名占比判 ja
+    assert server._text_lang_for("你好世界", lang) == "zh"        # 汉字无假名判 zh
+    assert server._text_lang_for("hello world", lang) == "auto"   # 无中日文字回退 auto
+
+
+def test_text_lang_pin_wins_over_cosy_whitelist(monkeypatch):
+    # env 钉死优先级最高：cosy 白名单收窄不影响钉死值
+    monkeypatch.setattr(server, "ENGINE_KIND", "cosy")
+    monkeypatch.setattr(server, "TEXT_LANG_PIN", "ja")
+    assert server._text_lang_for("hello", "en") == "ja"
+
+
 # --- _InflightHold / _acquire_inflight --------------------------------------
 
 def test_inflight_hold_release_idempotent():
