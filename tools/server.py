@@ -677,7 +677,9 @@ async def openai_audio_speech(request: Request):
     # _hold_through_response 按响应类型决定释放时机
     hold, busy = await _acquire_inflight()
     if busy is not None:
-        return busy
+        # 排队超时 429：OpenAI 协议侧走标准 error 结构（/tts 透传侧保持
+        # {"message"} 原样），带稳定 code 便于客户端区分限流与排队超时
+        return _openai_error(429, "server busy, queue wait timeout", err_code="queue_timeout")
     try:
         if FORMAT_MAP[fmt] != "wav":
             return _hold_through_response(await _proxy_to_engine("POST", json=payload), hold)
