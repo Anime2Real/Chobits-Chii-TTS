@@ -79,17 +79,20 @@ def get_model():
 # --- 响度归一（与门面 _gain_pcm 同参数：RMS 目标 ≈-16dBFS、峰值≤95%、只提不压） ---
 # cosy 原生流式绕过了门面的逐句归一（gpt-sovits 路径 ?stream=1 才有），
 # 归一下沉到引擎：非流式整包一次增益；流式逐块增益 + 跨块平滑（防泵浦效应）
-_TARGET_RMS = 5200
-_PEAK_CAP = 31000
-_MAX_GAIN = 8.0
+_TARGET_RMS = int(os.environ.get('COSY_TARGET_RMS', '7000'))   # ≈-13.4dBFS（原 5200≈-16dBFS 用户反馈偏小）
+_PEAK_CAP = int(os.environ.get('COSY_PEAK_CAP', '31700'))      # ≈97% 满幅（原 95%）
+_MAX_GAIN = float(os.environ.get('COSY_MAX_GAIN', '10.0'))
 
 
 def _pcm_gain(pcm, gain):
-    if abs(gain - 1.0) < 0.01:
+    """按 RMS 增益 + tanh 软削波：峰值不再硬卡（硬卡会被单个高瞬态压住整体响度），
+    超额部分 tanh 平滑饱和，语音无感；g<=1 不动（只提不压）"""
+    if gain <= 1.01:
         return pcm
-    a = array.array('h')
-    a.frombytes(pcm)
-    return array.array('h', (max(-32768, min(32767, int(round(x * gain)))) for x in a)).tobytes()
+    import numpy as np
+    a = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+    a = 32767.0 * np.tanh(a * gain / 32767.0)
+    return a.astype(np.int16).tobytes()
 
 
 def _desired_gain(pcm):
@@ -97,11 +100,10 @@ def _desired_gain(pcm):
     a.frombytes(pcm[: len(pcm) // 2 * 2])
     if not a:
         return 1.0
-    peak = max(abs(x) for x in a)
-    if peak == 0:
-        return 1.0
     rms = (sum(x * x for x in a) / len(a)) ** 0.5
-    return max(1.0, min(_MAX_GAIN, _TARGET_RMS / rms, _PEAK_CAP / peak))
+    if rms == 0:
+        return 1.0
+    return max(1.0, min(_MAX_GAIN, _TARGET_RMS / rms))
 
 
 def _to_pcm16(tts_speech):
@@ -139,7 +141,9 @@ def _pcm_stream(tts_text, prompt_text, ref_audio_path, speed):
         for out in get_model().inference_zero_shot(tts_text, prompt_text, ref_audio_path,
                                                    stream=True, speed=speed):
             pcm = _to_pcm16(out['tts_speech'])
-            gain = 0.5 * gain + 0.5 * _desired_gain(pcm)
+            desired = _desired_gain(pcm)
+            # 快攻慢放：提增益 80% 步进（首块即接近目标响度），降增益 20% 步进（防泵浦）
+            gain = gain + (0.8 if desired > gain else 0.2) * (desired - gain)
             yield _pcm_gain(pcm, gain)
 
 
