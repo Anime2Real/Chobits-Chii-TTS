@@ -305,6 +305,48 @@ def test_bind_non_loopback_without_tls_refuses_startup():
     assert b"CHII_TTS_SSL_CERTFILE" in proc.stderr
 
 
+# --- 启动校验：非法 ENGINE_KIND / TEXT_LANG 拒绝启动（与 BIND/TLS 守卫同款） --------
+
+def _import_server_in_subprocess(env_overrides):
+    env = dict(os.environ, **env_overrides)
+    tools_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools")
+    return subprocess.run([sys.executable, "-c", "import server"],
+                          cwd=tools_dir, env=env, capture_output=True, timeout=120)
+
+
+@pytest.mark.parametrize("value", ["GPT-SOVITS", "cosy-voice", "cosy ", " gpt-sovits"])
+def test_engine_kind_invalid_refuses_startup(value):
+    # typo/大小写/带空格都不静默容错：配错引擎模式比启动失败更糟（乱码/截断）
+    proc = _import_server_in_subprocess({"CHII_TTS_ENGINE_KIND": value})
+    assert proc.returncode != 0
+    assert b"CHII_TTS_ENGINE_KIND" in proc.stderr
+
+
+@pytest.mark.parametrize("value", ["gpt-sovits", "cosy"])
+def test_engine_kind_valid_imports(value):
+    assert _import_server_in_subprocess({"CHII_TTS_ENGINE_KIND": value}).returncode == 0
+
+
+def test_engine_kind_unset_defaults_and_imports():
+    env = dict(os.environ)
+    env.pop("CHII_TTS_ENGINE_KIND", None)
+    tools_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools")
+    assert subprocess.run([sys.executable, "-c", "import server"],
+                          cwd=tools_dir, env=env, capture_output=True, timeout=120).returncode == 0
+
+
+@pytest.mark.parametrize("value", ["japanese", "JA", " ja", "ja,zh"])
+def test_text_lang_pin_invalid_refuses_startup(value):
+    proc = _import_server_in_subprocess({"CHII_TTS_TEXT_LANG": value})
+    assert proc.returncode != 0
+    assert b"CHII_TTS_TEXT_LANG" in proc.stderr
+
+
+@pytest.mark.parametrize("value", ["", "ja", "zh", "auto", "en", "yue", "ko", "auto_yue"])
+def test_text_lang_pin_valid_imports(value):
+    assert _import_server_in_subprocess({"CHII_TTS_TEXT_LANG": value}).returncode == 0
+
+
 # --- _read_body_capped（请求体大小上限） ----------------------------------------
 
 class _FakeBodyRequest:

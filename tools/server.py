@@ -266,6 +266,9 @@ _CLIENT_LANGS = {"auto", "zh", "ja", "en", "yue", "ko", "auto_yue"}
 # en/ko/yue 文本会被 pyopenjtalk 按日文音读成乱码）：ENGINE_KIND=cosy 时收窄
 # 客户端白名单，en/ko/yue/auto_yue 按未提供处理、落回钉死/判定路径
 _COSY_CLIENT_LANGS = {"auto", "zh", "ja"}
+if TEXT_LANG_PIN and TEXT_LANG_PIN not in _CLIENT_LANGS:
+    sys.exit(f"[错误] CHII_TTS_TEXT_LANG={TEXT_LANG_PIN} 不在允许集 {sorted(_CLIENT_LANGS)}，"
+             "拒绝启动；留空则不钉死（按客户端/判定路径走）")
 
 
 def _text_lang_for(text: str, client_lang: str = "") -> str:
@@ -288,6 +291,10 @@ FRAGMENT_INTERVAL = _getenv_float("FRAGMENT_INTERVAL", 0.05)
 # 引擎类型：gpt-sovits（默认）/ cosy（CosyVoice3）。cosy 原生 token 级流式，
 # 无 GPT-SoVITS 流式截断 bug——wav 流式整句直通，跳过按句串行合并
 ENGINE_KIND = _getenv("ENGINE_KIND", "gpt-sovits")
+_ENGINE_KINDS = ("gpt-sovits", "cosy")
+if ENGINE_KIND not in _ENGINE_KINDS:
+    sys.exit(f"[错误] CHII_TTS_ENGINE_KIND={ENGINE_KIND} 非法（typo/带空格均不接受），"
+             f"可用: {list(_ENGINE_KINDS)}，拒绝启动")
 
 # --- wav 流式按句串行化 ---------------------------------------------------
 # 引擎流式 (streaming_mode=2) 模式下, 多句文本触发内部并行批推理的
