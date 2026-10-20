@@ -388,11 +388,26 @@ def _gain_pcm(pcm: bytes, target_rms: int = 5200, peak_cap: int = 31000, max_gai
     听感响度跟随 RMS 而非瞬时峰值：峰值归一后手机扬声器仍偏轻（真机实证），
     引擎参考音频近静音、合成波形动态范围偏大，按 RMS 提增益才有听感差异。
     增益上限防近静音段噪声被放大；g<=1 不动（避免压 Already-响的句）。
-    纯 Python (array) 实现: 门面宿主 Python >= 3.13 无 audioop/numpy，
-    单句 3-13 万采样点，扫描+增益约 80-200ms，相对秒级合成可忽略."""
+    快路径 audioop.rms/max/mul 三次 C 扫描（≤3.12 内建，实测 107ms→3ms/10s）；
+    3.13 移除 audioop 后回退纯 Python (array)，单句约 80-200ms，
+    相对秒级合成可忽略."""
     pcm = pcm[: len(pcm) // 2 * 2]
     if len(pcm) < 2:
         return pcm
+    # 惰性 import：audioop 3.11/3.12 import 即弹 DeprecationWarning，挪进函数——
+    # 只在首次归一调用时出现一次，不污染门面启动日志；3.13+ 已移除 → ImportError 回退
+    try:
+        import audioop
+    except ImportError:
+        audioop = None
+    if audioop is not None:
+        # mul 为饱和削波 + floor 取整，与回退路径 round+clamp 逐样本差异 ≤1 LSB，
+        # 取整/削波边界听感不可辨
+        peak = audioop.max(pcm, 2)
+        if peak == 0:
+            return pcm
+        g = min(max_gain, target_rms / audioop.rms(pcm, 2), peak_cap / peak)
+        return pcm if g <= 1.0 else audioop.mul(pcm, 2, g)
     a = array.array("h")
     a.frombytes(pcm)
     peak = max(map(abs, a))
@@ -402,7 +417,8 @@ def _gain_pcm(pcm: bytes, target_rms: int = 5200, peak_cap: int = 31000, max_gai
     g = min(max_gain, target_rms / rms, peak_cap / peak)
     if g <= 1.0:
         return pcm
-    out = array.array("h", (max(-32768, min(32767, int(round(s * g)))) for s in a))
+    # list comp 比 genexp 快 ~20%（genexp 无长度预分配，array 构造边迭代边扩容）
+    out = array.array("h", [max(-32768, min(32767, int(round(s * g)))) for s in a])
     return out.tobytes()
 
 

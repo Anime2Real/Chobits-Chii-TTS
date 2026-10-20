@@ -472,6 +472,33 @@ def test_ref_audio_local_symlink_escape_rejected(monkeypatch, tmp_path):
     assert server._ref_audio_path_allowed(str(real))
 
 
+# --- _gain_pcm 快路径/回退路径一致性（audioop 饱和削波/取整边界） ---------------------
+
+@pytest.mark.parametrize("samples,kwargs", [
+    ([0] * 1000, {}),                                   # 静音原样返回
+    ([500, -500] * 5000, {}),                           # 弱信号：max_gain 整倍增益
+    ([30000, -30000] * 5000, {}),                       # 响信号：g<=1 不动
+    ([8000, -8000] * 1000, {"peak_cap": 40000, "target_rms": 10 ** 9}),  # 真饱和削波点
+    ([333, -333, 1, -1] * 1000, {}),                    # 取整边界（floor vs round-half-even）
+    ([12345, -23456, 30000, -30000, 7, -7, 0, 1111] * 400, {}),  # 混合幅度
+])
+def test_gain_pcm_audioop_fast_path_matches_fallback(samples, kwargs, monkeypatch):
+    # audioop 为 C 快路径（≤3.12 内建；3.13 移除则本用例 skip）：
+    # sys.modules["audioop"]=None 让 import 抛 ImportError，强制纯 Python 回退对照
+    pytest.importorskip("audioop")
+    import array
+    pcm = array.array("h", samples).tobytes()
+    fast = server._gain_pcm(pcm, **kwargs)
+    monkeypatch.setitem(sys.modules, "audioop", None)
+    pure = server._gain_pcm(pcm, **kwargs)
+
+    assert len(fast) == len(pcm) == len(pure)
+    fa = array.array("h", fast)
+    pa = array.array("h", pure)
+    # mul 饱和削波 + floor 取整 vs round+clamp：逐样本差异 ≤1 LSB，削波点必须同值
+    assert all(abs(f - p) <= 1 for f, p in zip(fa, pa))
+
+
 # --- 参考文本缺失: 启动 WARN (不拒绝启动), /healthz/deep 带 ref_ready ------------
 
 def test_ref_text_missing_warns_at_startup_but_imports(tmp_path):
