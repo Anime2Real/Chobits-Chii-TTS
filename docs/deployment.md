@@ -1,7 +1,7 @@
 # Chobits-Chii-TTS 部署实录
 
 > 与家族其他服务一致的约定：推理引擎跑在 Docker 里（裸 api_v2，无鉴权，只绑 127.0.0.1），
-> 宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与 OpenAI 垫片，
+> 宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与 OpenAI 兼容门面，
 > 密钥经 `/etc/chobits-chii-tts.env` 注入，systemd 守护。
 
 ## 实测环境
@@ -85,7 +85,7 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 | `CHII_TTS_QUEUE_TIMEOUT` | `30` | 在途满员后排队等待空位的超时秒数，超时返回 429 |
 | `CHII_TTS_BATCH_SIZE` | `5` | 引擎批推理 batch_size 默认值（客户端未显式传时注入，仅非流式路径生效；流式一律钉 1） |
 | `CHII_TTS_BIND` | `127.0.0.1` | 门面监听地址（生产由 Caddy 反代；绑非回环地址须配 TLS，否则拒绝启动） |
-| `CHII_TTS_REF_AUDIO` | `/data/models/ref_audio.wav` | OpenAI 垫片 `chii` 音色的参考音频（**引擎容器内**路径） |
+| `CHII_TTS_REF_AUDIO` | `/data/models/ref_audio.wav` | OpenAI 兼容门面 `chii` 音色的参考音频（**引擎容器内**路径） |
 | `CHII_TTS_REF_AUDIO_PREFIX` | `/data/` | `/tts` 透传的 ref_audio 路径前缀约束（防容器内任意路径探测） |
 | `CHII_TTS_REF_TEXT_FILE` | `models/ref_text.txt` | 参考文本（门面**宿主机**路径，读出后内联传给引擎） |
 | `CHII_TTS_SSL_CERTFILE` / `CHII_TTS_SSL_KEYFILE` | （空） | 同时设置时以 HTTPS 启动 |
@@ -166,7 +166,7 @@ curl -G http://127.0.0.1:9882/tts \
   --data-urlencode "media_type=wav" -o engine.wav
 
 # 门面 OpenAI 兼容（Caddy 架构下客户端 baseUrl 填 https://<服务器IP>/chobits/v1，
-# 由 LLM 垫片转发本机门面；直调门面验证用本机回环 http://127.0.0.1:9880/v1）
+# 由 LLM 门面转发本机门面；直调门面验证用本机回环 http://127.0.0.1:9880/v1）
 curl -X POST http://127.0.0.1:9880/v1/tts/speech \
   -H "Authorization: Bearer <API_KEY>" \
   -H 'Content-Type: application/json' \
@@ -185,14 +185,14 @@ libsndfile 默认编码为 Vorbis，故是 Ogg/Vorbis 而非 Opus）。`wav` 为
 ```bash
 # 深度健康检查 (真实合成探测, 结果缓存 30s; 异常时 503)
 # 响应体含 ref_ready: 参考文本缺失/为空时为 false —— 引擎健康仍 200,
-# 但 OpenAI 垫片在跑零样本提示, 合成质量降质 (启动日志有 WARN)
+# 但 OpenAI 兼容门面在跑零样本提示, 合成质量降质 (启动日志有 WARN)
 curl -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:9880/healthz/deep
 ```
 
 注意：Caddy 架构（2026-09-12 起）下门面绑回环、公网只放行 TCP 443，安全组
 **不需要**放行 9880/9882；对外提供服务须遵守 CC BY-NC-SA 4.0（非商业）。
 面向公众分发应用时应由后端服务代为调用（现网即如此：客户端 → 443 → LLM
-垫片 → 本机门面），不要把唯一密钥嵌进客户端。
+门面 → 本机门面），不要把唯一密钥嵌进客户端。
 
 ## 实测记录（2026-09-10 本机迁移）
 

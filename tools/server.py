@@ -1,4 +1,4 @@
-"""小叽 TTS HTTP 门面: 鉴权 + 限流 + OpenAI 垫片, 反向代理 Docker 容器内的 GPT-SoVITS 引擎.
+"""小叽 TTS HTTP 门面: 鉴权 + 限流 + OpenAI 兼容门面, 反向代理 Docker 容器内的 GPT-SoVITS 引擎.
 
 架构 (与家族 ASR 服务一致): 推理引擎 (上游 api_v2, 无鉴权) 跑在 Docker 容器里,
 只发布到宿主机 127.0.0.1 (见 docs/deployment.md); 本门面是唯一对外入口:
@@ -8,10 +8,10 @@
   - TLS: 同时设置 CHII_TTS_SSL_CERTFILE / CHII_TTS_SSL_KEYFILE 时以 HTTPS 启动.
   - 引擎地址: CHII_TTS_ENGINE_URL (默认 http://127.0.0.1:9882).
 
-OpenAI TTS 兼容垫片 (客户端 baseUrl 填 http(s)://<IP>:9880/v1):
+OpenAI TTS 兼容门面 (客户端 baseUrl 填 http(s)://<IP>:9880/v1):
   - GET  /healthz          → 200 (免鉴权浅探活，与 ASR 门面对齐；深探测 /healthz/deep 仍需 key)
   - GET  /v1/models        → 固定返回 chii-tts
-  - POST /v1/tts/speech    → OpenAI TTS 协议（/v1/audio/speech 保留为兼容别名）: {"model", "input", "voice", "response_format"?, "speed"?}
+  - POST /v1/tts/speech    → OpenAI TTS 协议: {"model", "input", "voice", "response_format"?, "speed"?}
     voice 映射引擎侧参考音频 (当前仅 "chii");
     response_format 支持 wav/aac/opus (默认 wav; mp3/flac/pcm 暂不支持, 返回 400;
     opus 走引擎 media_type=ogg, 即 Ogg/Vorbis 封装而非 Opus 编码);
@@ -40,14 +40,14 @@ wav 流式路径的门面侧加固 (引擎流式模式多句并行批推理会�
     结果缓存 CHII_TTS_DEEP_PROBE_TTL 秒 (默认 30) 避免高频探测烧 GPU, 缓存过期后的
     并发探测走 single-flight 锁 (同时至多一次真实合成, 其余请求回缓存结果);
     响应体带 ref_ready (启动时参考文本可读且非空则为 true) —— 参考文本缺失
-    时 OpenAI 垫片静默退化为零样本提示, 引擎仍健康, 状态码不变, 靠该字段
+    时 OpenAI 兼容门面静默退化为零样本提示, 引擎仍健康, 状态码不变, 靠该字段
     与启动 WARN 日志暴露降质; 与其余端点一样须带 API key.
 
 原生 /tts (GET/POST) 透传到引擎 (GET query / POST JSON)，但经参数白名单 + 数值钳制
 + ref_audio 路径前缀约束（CHII_TTS_REF_AUDIO_PREFIX，默认 /data/；归一化后须
 严格落在前缀内，.. 穿越与符号链接逃逸均拒绝）——不再暴露
 引擎全部参数面。流式透传 (streaming_mode 为真) 的 batch_size 一律钉 1
-（与 OpenAI 垫片 wav 流式同款规避，见上方说明）。引擎的 /control 与 /set_*_weights 不对外暴露.
+（与 OpenAI 兼容门面 wav 流式同款规避，见上方说明）。引擎的 /control 与 /set_*_weights 不对外暴露.
 
 资源防护（TTS 推理昂贵，不设防时单请求长文本即可独占 GPU 数分钟）:
   - 请求体大小硬上限 CHII_TTS_MAX_BODY_BYTES (默认 25MB, /tts POST 与
@@ -212,7 +212,7 @@ def _hold_through_response(response, hold: _InflightHold):
     response.body_iterator = _guarded()
     return response
 
-# --- OpenAI TTS 兼容垫片 -------------------------------------------------
+# --- OpenAI TTS 兼容门面 -------------------------------------------------
 # voice → 引擎侧参考音频映射. ref_audio_path 是引擎容器内路径 (客户端不可见),
 # 用 CHII_TTS_REF_AUDIO 覆盖; prompt_text 由门面从宿主机文件读出后内联传给引擎,
 # 用 CHII_TTS_REF_TEXT_FILE 覆盖 (默认取本仓库 models/ref_text.txt)
@@ -223,15 +223,15 @@ try:
         _ref_text = _f.read().strip()
 except OSError as _exc:
     _ref_text = ""
-    # 静默置空会让 OpenAI 垫片退化为零样本提示（合成质量降质且 /healthz/deep 仍 200）：
+    # 静默置空会让 OpenAI 兼容门面退化为零样本提示（合成质量降质且 /healthz/deep 仍 200）：
     # 启动即 WARN，深度健康检查响应体带 ref_ready 字段暴露该状态（见 healthz_deep）
     print(f"[warn] 参考文本文件不可读: {_ref_text_file} ({_exc.__class__.__name__})，"
-          f"OpenAI 垫片将退化为零样本提示，合成质量可能降质；"
+          f"OpenAI 兼容门面将退化为零样本提示，合成质量可能降质；"
           f"可用 CHII_TTS_REF_TEXT_FILE 指定正确路径", file=sys.stderr)
 if not _ref_text:
     if os.path.exists(_ref_text_file):
         print(f"[warn] 参考文本文件为空: {_ref_text_file}，"
-              f"OpenAI 垫片将退化为零样本提示，合成质量可能降质", file=sys.stderr)
+              f"OpenAI 兼容门面将退化为零样本提示，合成质量可能降质", file=sys.stderr)
     REF_READY = False
 else:
     REF_READY = True
@@ -634,7 +634,6 @@ async def openai_models():
 
 
 @APP.post("/v1/tts/speech")
-@APP.post("/v1/audio/speech")
 async def openai_audio_speech(request: Request):
     body_bytes, too_large = await _read_body_capped(request)
     if too_large is not None:
@@ -838,7 +837,7 @@ def _sanitize_tts_params(items):
     # "Sizes of tensors must match"——返回 200 但音频截断，反复触发还会拖垮引擎
     # （之后所有请求 200 空流，见模块 docstring）；引擎内部还会把单句再切成片段，
     # 客户端侧切句管不到。故流式请求的 batch_size 一律钉 1（覆盖显式传值并记日志），
-    # 与 OpenAI 垫片 wav 流式路径同款规避；对单片段文本无影响
+    # 与 OpenAI 兼容门面 wav 流式路径同款规避；对单片段文本无影响
     if _is_streaming(payload.get("streaming_mode")) and payload["batch_size"] != 1:
         print(f"[tts] streaming_mode 开启，batch_size 由 {payload['batch_size']!r} 强制钉为 1",
               file=sys.stderr)
@@ -907,7 +906,7 @@ async def auth_and_rate_limit(request, call_next):
     if request.url.path == "/healthz":
         return await call_next(request)
 
-    limited_path = request.url.path in ("/tts", "/v1/tts/speech", "/v1/audio/speech")
+    limited_path = request.url.path in ("/tts", "/v1/tts/speech")
     # 限流前置：鉴权失败也计桶（在线爆破有成本）；空桶即删键防海量 IP 驻留；
     # 单调时钟（系统时钟回拨不会把窗口拉长）
     if RATE_LIMIT > 0 and limited_path:

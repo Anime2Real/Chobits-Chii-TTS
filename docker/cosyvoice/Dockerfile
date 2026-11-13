@@ -1,6 +1,6 @@
 # CosyVoice3 推理引擎镜像 (Fun-CosyVoice3-0.5B-chii-sft, FastAPI shim 见 engine_server.py)
 # 与 GPT-SoVITS 引擎镜像 (../Dockerfile) 同级契约: 引擎无鉴权, 只发布到宿主机 127.0.0.1;
-# 鉴权/限流/OpenAI 垫片由宿主机门面 tools/server.py 负责 (一行不改, CHII_TTS_ENGINE_URL 指过来即可)
+# 鉴权/限流/OpenAI 兼容门面由宿主机门面 tools/server.py 负责 (一行不改, CHII_TTS_ENGINE_URL 指过来即可)
 #
 # 构建:  docker build -t chobits-chii-cosyvoice-engine docker/cosyvoice/
 #        国内可加 --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \

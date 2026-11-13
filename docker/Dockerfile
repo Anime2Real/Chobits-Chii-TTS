@@ -1,5 +1,5 @@
 # Chobits-Chii-TTS 推理引擎镜像 (GPT-SoVITS api_v2, v2Pro)
-# 引擎无鉴权, 只发布到宿主机 127.0.0.1; 鉴权/限流/OpenAI 垫片由宿主机门面 tools/server.py 负责
+# 引擎无鉴权, 只发布到宿主机 127.0.0.1; 鉴权/限流/OpenAI 兼容门面由宿主机门面 tools/server.py 负责
 #
 # 构建:  docker build -t chobits-chii-tts-engine docker/
 #        国内可加 --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \

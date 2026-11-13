@@ -1,5 +1,5 @@
 [Unit]
-Description=Chobits-Chii TTS 门面 (GPT-SoVITS 反向代理, OpenAI 兼容垫片)
+Description=Chobits-Chii TTS 门面 (GPT-SoVITS 反向代理, OpenAI 兼容门面)
 After=network-online.target docker.service
 Wants=network-online.target
 

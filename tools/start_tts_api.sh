@@ -1,5 +1,5 @@
 #!/bin/bash
-# 启动小叽 TTS 门面 (tools/server.py: 鉴权 + 限流 + OpenAI 垫片, 反向代理容器内引擎)
+# 启动小叽 TTS 门面 (tools/server.py: 鉴权 + 限流 + OpenAI 兼容门面, 反向代理容器内引擎)
 # 用法: bash tools/start_tts_api.sh [端口, 默认 9880]
 # 需要环境变量 CHII_TTS_API_KEY (systemd 从 /etc/chobits-chii-tts.env 读取);
 # 推理引擎在 Docker 容器里 (见 docs/deployment.md), 本脚本只起门面;

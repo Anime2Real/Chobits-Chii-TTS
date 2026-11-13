@@ -86,9 +86,9 @@ vLLM（官方支持 ≥0.11.0 V1）第三方报告首 token 800ms→150ms（未�
 
 ## 6. 部署集成分析
 
-现有架构（引擎 Docker 容器绑回环 + `tools/server.py` 门面鉴权/限流/OpenAI 垫片）可直接复用：
+现有架构（引擎 Docker 容器绑回环 + `tools/server.py` 门面鉴权/限流/OpenAI 兼容门面）可直接复用：
 
-- CosyVoice 官方 `runtime/python/` 自带 **FastAPI / gRPC server + Dockerfile**（无预构建镜像，需自建），可替换 `docker/` 内 GPT-SoVITS 引擎，门面基本不用动（`CHII_TTS_ENGINE_URL` 指向新引擎，OpenAI 垫片的 voice→参考音频映射逻辑保留）。
+- CosyVoice 官方 `runtime/python/` 自带 **FastAPI / gRPC server + Dockerfile**（无预构建镜像，需自建），可替换 `docker/` 内 GPT-SoVITS 引擎，门面基本不用动（`CHII_TTS_ENGINE_URL` 指向新引擎，OpenAI 兼容门面的 voice→参考音频映射逻辑保留）。
 - 高阶部署另有 Triton + TensorRT-LLM（docker compose 一键）与 vLLM 路径，但两者在 8GB 卡上都不适用（显存翻倍/额外开销），属服务器侧升级选项。
 - 生态风险：仓库 2026-05 后停止更新（673 open issues），org 迁移到 QwenAudio 后与 Qwen3-TTS 生态靠拢，CosyVoice 主线维护优先级存疑。
 

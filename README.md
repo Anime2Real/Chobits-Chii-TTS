@@ -173,7 +173,7 @@ python training/prepare_cosyvoice_data.py /tmp/chii-voice-hf/wavs
 ## 🌐 部署为 HTTP 服务
 
 部署架构与 `gpt-sovits` 分支完全一致：**引擎 Docker 容器（绑回环）+ 宿主机门面
-`tools/server.py`（唯一对外入口：API Key 鉴权 + 限流 + OpenAI 垫片）**。门面零改动，
+`tools/server.py`（唯一对外入口：API Key 鉴权 + 限流 + OpenAI 兼容门面）**。门面零改动，
 仅引擎镜像换成 `docker/cosyvoice/`：
 
 ```bash
