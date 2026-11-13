@@ -22,7 +22,7 @@
 - `test_endpoints.py`：TestClient 端点级——`/healthz` 免鉴权（无 key / 错 key 均 200，
   不触引擎）、`/healthz/deep` 无 key 401 且响应体含 `ref_ready`（状态码不随其变化）、
   无 key / 错 key / query api_key 访问受保护端点均 401，限流 429，
-  `/tts` 与 `/v1/audio/speech` 转发给引擎的参数断言
+  `/tts` 与 `/v1/tts/speech` 转发给引擎的参数断言
   （流式 batch_size==1、非流式注入默认 5）、请求体超限 413（含 chunked 累计兜底,
   错误体含稳定 code `payload_too_large`, 超限不触引擎）、ref_audio `..` 穿越 400。
 - `test_train_chii.py`：训练预处理步骤完整性标记——合成临时目录 + FakeRunner
