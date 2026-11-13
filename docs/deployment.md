@@ -78,8 +78,8 @@ bash tools/start_tts_api.sh 9880     # 首次运行自动在仓库根目录建 .
 | --- | --- | --- |
 | `CHII_TTS_API_KEY` | （必填） | API 密钥 |
 | `CHII_TTS_ENGINE_URL` | `http://127.0.0.1:9882` | 引擎地址 |
-| `CHII_TTS_RATE_LIMIT` | `60` | `/tts` 与 `/v1/audio/speech` 每 IP 每分钟限流，0 关闭 |
-| `CHII_TTS_MAX_BODY_BYTES` | `26214400` (25MB) | `/tts` POST 与 `/v1/audio/speech` 请求体大小上限，超限 413（Content-Length 预检 + 无长度时按流累计兜底）；uvicorn/Caddy 无默认 cap |
+| `CHII_TTS_RATE_LIMIT` | `60` | `/tts` 与 `/v1/tts/speech` 每 IP 每分钟限流，0 关闭 |
+| `CHII_TTS_MAX_BODY_BYTES` | `26214400` (25MB) | `/tts` POST 与 `/v1/tts/speech` 请求体大小上限，超限 413（Content-Length 预检 + 无长度时按流累计兜底）；uvicorn/Caddy 无默认 cap |
 | `CHII_TTS_MAX_TEXT_CHARS` | `2000` | 合成文本长度硬上限（两路径均生效），防长文本独占 GPU |
 | `CHII_TTS_MAX_INFLIGHT` | `8` | 全局在途并发上限（保护 GPU）：超上限排队等待空位，`CHII_TTS_QUEUE_TIMEOUT` 秒内仍拿不到才 429；流式请求（wav 流式与 `/tts` 透传）的信号量持有到推流结束/客户端断开 |
 | `CHII_TTS_QUEUE_TIMEOUT` | `30` | 在途满员后排队等待空位的超时秒数，超时返回 429 |
@@ -167,7 +167,7 @@ curl -G http://127.0.0.1:9882/tts \
 
 # 门面 OpenAI 兼容（Caddy 架构下客户端 baseUrl 填 https://<服务器IP>/chobits/v1，
 # 由 LLM 垫片转发本机门面；直调门面验证用本机回环 http://127.0.0.1:9880/v1）
-curl -X POST http://127.0.0.1:9880/v1/audio/speech \
+curl -X POST http://127.0.0.1:9880/v1/tts/speech \
   -H "Authorization: Bearer <API_KEY>" \
   -H 'Content-Type: application/json' \
   -d '{"model": "chii-tts", "input": "ちぃ、秀樹のこと、大好き。", "voice": "chii"}' \
@@ -178,7 +178,7 @@ curl -X POST http://127.0.0.1:9880/v1/audio/speech \
 `wav`/`aac`/`opus`，默认 `wav`（`opus` 映射到引擎 `media_type=ogg`，引擎写 ogg 时未指定 subtype，
 libsndfile 默认编码为 Vorbis，故是 Ogg/Vorbis 而非 Opus）。`wav` 为流式输出（边合成边推流，首字延迟低；多句文本
 由门面按句串行合成，见第 3 节加固说明）；`aac`/`opus` 为合成完成后一次性返回。
-`wav` 流式另支持 query 开关 `?stream=1`（`POST /v1/audio/speech?stream=1`）：改走「整句缓冲 + 逐句 RMS
+`wav` 流式另支持 query 开关 `?stream=1`（`POST /v1/tts/speech?stream=1`）：改走「整句缓冲 + 逐句 RMS
 响度归一」路径，句间响度更一致、音量只增不减——默认路径不做响度归一，两条路径听感响度可能不同；代价是每句
 须等整句合成完才下发（首块只含 WAV 头且其余句子皆空流时该路径返回 200 空 body 而非 502，因状态行先于 body 发出）。
 

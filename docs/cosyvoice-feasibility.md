@@ -278,7 +278,7 @@ docker run -d --gpus all -p 127.0.0.1:9882:9880 \
   RIFF/data=0xFFFFFFFF），PCM 总长 216960B=4.52s 与非流式一致；ogg 200（ffprobe ogg/1.65s）；
   GET /tts 与 GET 流式均 200；坏 ref_audio_path → 400、空 text → 400。
 - **门面端到端**（`CHII_TTS_ENGINE_URL=http://127.0.0.1:9883`，门面零改动）：
-  `/healthz/deep` 200（ref_ready=true）；`/v1/audio/speech` 多句 wav 合并流 200 可播放
+  `/healthz/deep` 200（ref_ready=true）；`/v1/tts/speech` 多句 wav 合并流 200 可播放
   （3 句 5.44s，whisper-small 回译「チー、イデキのこと、大好き、ずっと一緒にいる。今日も元気だよ。」，
   内容完整）；opus 200（ogg/3.13s）；`/tts` GET 透传 200。
 - **门面测试套件**：`python -m pytest tests/ -q` → 175 passed / 1 failed。唯一失败

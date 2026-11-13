@@ -4,14 +4,14 @@
 只发布到宿主机 127.0.0.1 (见 docs/deployment.md); 本门面是唯一对外入口:
   - API Key: 环境变量 CHII_TTS_API_KEY (必填, 未设置则拒绝启动).
     客户端通过 `Authorization: Bearer <key>` 提供 (query 传 key 会进访问日志, 不支持).
-  - 限流: /tts 与 /v1/audio/speech 每 IP 每分钟最多 CHII_TTS_RATE_LIMIT 次 (默认 60, 设 0 关闭).
+  - 限流: /tts 与 /v1/tts/speech 每 IP 每分钟最多 CHII_TTS_RATE_LIMIT 次 (默认 60, 设 0 关闭).
   - TLS: 同时设置 CHII_TTS_SSL_CERTFILE / CHII_TTS_SSL_KEYFILE 时以 HTTPS 启动.
   - 引擎地址: CHII_TTS_ENGINE_URL (默认 http://127.0.0.1:9882).
 
 OpenAI TTS 兼容垫片 (客户端 baseUrl 填 http(s)://<IP>:9880/v1):
   - GET  /healthz          → 200 (免鉴权浅探活，与 ASR 门面对齐；深探测 /healthz/deep 仍需 key)
   - GET  /v1/models        → 固定返回 chii-tts
-  - POST /v1/audio/speech  → OpenAI TTS 协议: {"model", "input", "voice", "response_format"?, "speed"?}
+  - POST /v1/tts/speech    → OpenAI TTS 协议（/v1/audio/speech 保留为兼容别名）: {"model", "input", "voice", "response_format"?, "speed"?}
     voice 映射引擎侧参考音频 (当前仅 "chii");
     response_format 支持 wav/aac/opus (默认 wav; mp3/flac/pcm 暂不支持, 返回 400;
     opus 走引擎 media_type=ogg, 即 Ogg/Vorbis 封装而非 Opus 编码);
@@ -51,11 +51,11 @@ wav 流式路径的门面侧加固 (引擎流式模式多句并行批推理会�
 
 资源防护（TTS 推理昂贵，不设防时单请求长文本即可独占 GPU 数分钟）:
   - 请求体大小硬上限 CHII_TTS_MAX_BODY_BYTES (默认 25MB, /tts POST 与
-    /v1/audio/speech 均生效): Content-Length 超限直接 413, 无 Content-Length
+    /v1/tts/speech 均生效): Content-Length 超限直接 413, 无 Content-Length
     (chunked) 时按 request.stream() 累计兜底 —— uvicorn/Caddy 均无默认 cap,
     不设防时持 key 即可发超大 JSON 吃内存;
   - 合成文本长度硬上限 CHII_TTS_MAX_TEXT_CHARS (默认 2000 字符, /tts 与
-    /v1/audio/speech 均生效);
+    /v1/tts/speech 均生效);
   - 全局在途并发上限 CHII_TTS_MAX_INFLIGHT (默认 8)：超上限不立即拒绝，
     排队等待空位，CHII_TTS_QUEUE_TIMEOUT 秒 (默认 30) 内仍拿不到才 429。
     持有期覆盖真实 GPU 占用：并发控制在端点层执行，流式响应 (wav 流式与
@@ -115,7 +115,7 @@ _auth = ApiKeyAuth(API_KEY)
 _key_ok = _auth.key_ok
 
 RATE_LIMIT = _getenv_int("RATE_LIMIT", 60)
-# 请求体大小硬上限（字节）：POST /tts 与 /v1/audio/speech 的 JSON 体上限，
+# 请求体大小硬上限（字节）：POST /tts 与 /v1/tts/speech 的 JSON 体上限，
 # 与 ASR 批量上传上限同量级（25MB）。uvicorn/Caddy 均无默认 cap，
 # 持 key 即可发超大 JSON 吃内存；chunked 可不带 Content-Length，故再按累计兜底
 MAX_BODY_BYTES = _getenv_int("MAX_BODY_BYTES", 25 * 1024 * 1024)
@@ -143,10 +143,10 @@ _client = httpx.AsyncClient(
     timeout=httpx.Timeout(connect=10.0, read=600.0, write=120.0, pool=60.0),
 )
 
-# /tts 与 /v1/audio/speech 的每 IP 滑动窗口限流桶（共享库 SlidingWindowRateLimiter）；
+# /tts 与 /v1/tts/speech 的每 IP 滑动窗口限流桶（共享库 SlidingWindowRateLimiter）；
 # RATE_LIMIT 在检查路径上同步进 limiter，保持 monkeypatch 模块常量即时生效的行为不变
 _rate_limiter = SlidingWindowRateLimiter(RATE_LIMIT)
-# /tts 与 /v1/audio/speech 的全局在途并发信号量（保护 GPU）。限流管请求数管不了
+# /tts 与 /v1/tts/speech 的全局在途并发信号量（保护 GPU）。限流管请求数管不了
 # 单请求成本（长文本独占 GPU 数分钟）；并发控制在端点层执行而非中间件——
 # BaseHTTPMiddleware 的 call_next 拿到响应头即返回，流式合成数分钟的 GPU 占用
 # 会落在信号量外，上限名存实亡。
@@ -505,7 +505,7 @@ DEEP_PROBE_TIMEOUT = _getenv_float("DEEP_PROBE_TIMEOUT", 20.0)
 _deep_probe: dict = {"at": 0.0, "status": "degraded", "engine": "not probed yet"}
 # single-flight：探测在途期间并发进来的监控请求直接回缓存结果（不排队等待，
 # 首探尚未完成时回的是上一次缓存值，可能是初值 degraded）。深探测既不在限流路径内
-# （中间件 limited_path 只含 /tts 与 /v1/audio/speech）、也不占在途信号量，
+# （中间件 limited_path 只含 /tts 与 /v1/tts/speech）、也不占在途信号量，
 # 不加这道锁时 N 个并发监控请求就是 N 次 GPU 合成
 _deep_probe_lock: asyncio.Lock | None = None
 
@@ -633,6 +633,7 @@ async def openai_models():
         {"id": TTS_MODEL, "object": "model", "created": 0, "owned_by": "chobits-chii"}]}
 
 
+@APP.post("/v1/tts/speech")
 @APP.post("/v1/audio/speech")
 async def openai_audio_speech(request: Request):
     body_bytes, too_large = await _read_body_capped(request)
@@ -906,7 +907,7 @@ async def auth_and_rate_limit(request, call_next):
     if request.url.path == "/healthz":
         return await call_next(request)
 
-    limited_path = request.url.path in ("/tts", "/v1/audio/speech")
+    limited_path = request.url.path in ("/tts", "/v1/tts/speech", "/v1/audio/speech")
     # 限流前置：鉴权失败也计桶（在线爆破有成本）；空桶即删键防海量 IP 驻留；
     # 单调时钟（系统时钟回拨不会把窗口拉长）
     if RATE_LIMIT > 0 and limited_path:
