@@ -10,3 +10,8 @@ __pycache__/
 
 # 本地虚拟环境备份（勿入库）
 .venv.bak-*/
+
+# ASR/切边审计产物与隔离环境
+data/trimmed/
+.venv-asr/
+.venv-train/

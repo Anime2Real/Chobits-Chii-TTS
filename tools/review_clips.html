@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>小叽音频人工复核</title>
+<style>
+  :root {
+    --bg: #111512;
+    --panel: #18201b;
+    --panel-2: #1f2a23;
+    --line: #34443a;
+    --text: #e8efe9;
+    --muted: #94a69b;
+    --green: #73d39b;
+    --green-2: #2f7a50;
+    --orange: #e2a84f;
+    --red: #e17979;
+    --blue: #83b8e8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, "Noto Sans SC", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--line); background: #0d110e;
+  }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .03em; }
+  .stats { color: var(--muted); font-variant-numeric: tabular-nums; }
+  main { display: grid; grid-template-columns: minmax(250px, 340px) 1fr; height: calc(100vh - 58px); }
+  aside {
+    border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0;
+  }
+  .filters { padding: 10px; border-bottom: 1px solid var(--line); }
+  select, button, input[type=number] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 9px; font: inherit;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--green-2); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--green-2); border-color: var(--green); color: white; }
+  button.danger { color: var(--red); }
+  #list { overflow: auto; flex: 1; }
+  .item {
+    width: 100%; text-align: left; border: 0; border-bottom: 1px solid #222c25;
+    border-radius: 0; padding: 9px 12px; background: transparent;
+  }
+  .item:hover, .item.active { background: #223129; }
+  .item .name { display: flex; justify-content: space-between; gap: 8px; }
+  .item .file { font-family: ui-monospace, monospace; font-size: 12px; }
+  .item .text { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tag {
+    display: inline-block; padding: 1px 6px; border-radius: 999px; font-size: 11px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .tag.P0 { color: var(--red); border-color: #734040; }
+  .tag.P1 { color: var(--orange); border-color: #6e5730; }
+  .tag.done { color: var(--green); border-color: #376a4d; }
+  #editor { overflow: auto; padding: 18px 22px 40px; min-width: 0; }
+  .empty { color: var(--muted); padding: 60px 10px; text-align: center; }
+  .head { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .file-title { font: 15px ui-monospace, monospace; }
+  .reasons { color: var(--muted); }
+  .text { font-size: 17px; margin: 10px 0 14px; }
+  #wave {
+    width: 100%; height: 220px; display: block; background: #0b0f0c;
+    border: 1px solid var(--line); border-radius: 8px; touch-action: none; cursor: ew-resize;
+  }
+  .wave-help { color: var(--muted); font-size: 12px; margin: 5px 0 12px; }
+  audio { width: 100%; margin: 4px 0 12px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
+  .row label { color: var(--muted); }
+  input[type=number] { width: 100px; font-variant-numeric: tabular-nums; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 14px 0; }
+  .box h2 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
+  .interval { display: flex; gap: 10px; align-items: center; padding: 5px 0; }
+  .interval label { flex: 1; }
+  .interval code { color: var(--orange); font-variant-numeric: tabular-nums; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+  .status { color: var(--muted); margin-top: 12px; min-height: 22px; }
+  .toast {
+    position: fixed; right: 22px; bottom: 22px; max-width: 420px;
+    background: #25352b; border: 1px solid var(--green-2); padding: 10px 14px;
+    border-radius: 8px; box-shadow: 0 8px 30px #0008; opacity: 0;
+    pointer-events: none; transition: opacity .15s;
+  }
+  .toast.show { opacity: 1; }
+  .toast.error { border-color: #7a3f3f; background: #342020; }
+  @media (max-width: 850px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    aside { max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--line); }
+    #editor { padding: 14px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>小叽音频人工复核</h1>
+  <div class="stats" id="stats">加载中</div>
+</header>
+<main>
+  <aside>
+    <div class="filters">
+      <select id="filter">
+        <option value="pending">待处理</option>
+        <option value="review">全部需复核</option>
+        <option value="all">全部音频</option>
+        <option value="saved">已保存</option>
+        <option value="dropped">已排除</option>
+      </select>
+    </div>
+    <div id="list"></div>
+  </aside>
+  <section id="editor">
+    <div id="empty" class="empty">从左侧选择一条音频开始。</div>
+    <div id="work" hidden>
+      <div class="head">
+        <div>
+          <span id="priority" class="tag"></span>
+          <span id="filetitle" class="file-title"></span>
+        </div>
+        <div id="reasons" class="reasons"></div>
+      </div>
+      <p id="text" class="text"></p>
+      <canvas id="wave" height="220"></canvas>
+      <div class="wave-help">拖动绿色/红色边界调整首尾；橙色区域是自动检测到的长停顿。</div>
+      <audio id="player" controls preload="none"></audio>
+      <div class="row">
+        <button id="hearOriginal">试听自动切边</button>
+        <button id="preview" class="primary">试听当前剪辑</button>
+        <button id="next">下一条</button>
+      </div>
+      <div class="box">
+        <h2>剪辑范围</h2>
+        <div class="row">
+          <label for="start">起点</label>
+          <input id="start" type="number" min="0" step="0.01">
+          <label for="end">终点</label>
+          <input id="end" type="number" min="0" step="0.01">
+          <span id="duration" class="reasons"></span>
+        </div>
+      </div>
+      <div class="box" id="intervalBox">
+        <h2>句中长停顿（勾选“移除中间部分”，两侧各保留 75ms）</h2>
+        <div id="intervals" class="reasons">无</div>
+      </div>
+      <div class="actions">
+        <button id="save" class="primary">保存剪辑并下一条</button>
+        <button id="keep">保留自动切边并下一条</button>
+        <button id="drop" class="danger">排除此条</button>
+        <button id="reset">撤销已保存结果</button>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+  </section>
+</main>
+<div id="toast" class="toast"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const PAD = 0.075;
+const state = { records: [], stats: {}, filter: 'pending' };
+const view = {
+  current: null, peaks: null, waveformCache: new Map(), dragging: null,
+  previewUrl: null, originalUrl: null, toastTimer: null,
+};
+const form = { start: 0, end: 0, remove: new Set() };
+
+async function api(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`;
+    try { message = (await response.json()).error || message; } catch (_) {}
+    throw new Error(message);
+  }
+  return response;
+}
+
+function toast(message, isError = false) {
+  const el = $('toast');
+  el.textContent = message;
+  el.className = 'toast show' + (isError ? ' error' : '');
+  clearTimeout(view.toastTimer);
+  view.toastTimer = setTimeout(() => { el.className = 'toast'; }, 3200);
+}
+
+function fmt(seconds) {
+  if (!Number.isFinite(seconds)) return '—';
+  return seconds.toFixed(2) + 's';
+}
+
+function reasonText(record) {
+  return record.reasons.map((x) => ({
+    near_silent: '全片近静音', internal_silence: '句中有长停顿',
+    low_level: '整体音量偏低', very_short: '剪辑后过短',
+  }[x] || x)).join(' · ');
+}
+
+function filteredRecords() {
+  const rank = {P0: 0, P1: 1};
+  return state.records.filter((r) => {
+    if (state.filter === 'pending') return r.needs_review && !r.decision;
+    if (state.filter === 'review') return r.needs_review;
+    if (state.filter === 'all') return true;
+    if (state.filter === 'saved') return !!r.decision && r.decision.action !== 'drop';
+    if (state.filter === 'dropped') return !!r.decision && r.decision.action === 'drop';
+    return true;
+  }).sort((a, b) => (rank[a.priority] ?? 9) - (rank[b.priority] ?? 9) || a.file.localeCompare(b.file));
+}
+
+function renderStats() {
+  const s = state.stats;
+  $('stats').textContent = `待处理 ${s.pending} / 需复核 ${s.needs_review} · 已处理 ${s.reviewed} · 总计 ${s.total}`;
+}
+
+function renderList() {
+  const list = $('list');
+  list.replaceChildren();
+  const records = filteredRecords();
+  if (!records.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = '这个筛选下没有音频。';
+    list.appendChild(empty);
+    return;
+  }
+  for (const record of records) {
+    const button = document.createElement('button');
+    button.className = 'item' + (view.current && view.current.file === record.file ? ' active' : '');
+    button.addEventListener('click', () => selectFile(record.file));
+    const name = document.createElement('div');
+    name.className = 'name';
+    const file = document.createElement('span');
+    file.className = 'file';
+    file.textContent = record.file;
+    const tag = document.createElement('span');
+    tag.className = 'tag ' + (record.decision ? 'done' : record.priority || '');
+    tag.textContent = record.decision
+      ? ({keep: '已保留', edit: '已剪辑', drop: '已排除'}[record.decision.action] || '已处理')
+      : (record.priority || '可抽查');
+    name.append(file, tag);
+    const text = document.createElement('div');
+    text.className = 'text';
+    text.textContent = record.text;
+    button.append(name, text);
+    list.appendChild(button);
+  }
+}
+
+async function loadState(selectFirst = false) {
+  const payload = await (await api('/api/state')).json();
+  state.records = payload.records;
+  state.stats = payload.stats;
+  renderStats();
+  renderList();
+  if (selectFirst && !view.current) {
+    const first = filteredRecords()[0];
+    if (first) await selectFile(first.file);
+  }
+}
+
+function decisionRemoveSet(record) {
+  const selected = new Set();
+  if (!record.decision || record.decision.action !== 'edit') return selected;
+  for (const removed of record.decision.remove_intervals || []) {
+    const index = record.internal.findIndex((run) =>
+      Math.abs(run.start - removed.start) < 0.002 && Math.abs(run.end - removed.end) < 0.002);
+    if (index >= 0) selected.add(index);
+  }
+  return selected;
+}
+
+async function selectFile(file) {
+  const record = state.records.find((r) => r.file === file);
+  if (!record) return;
+  view.current = record;
+  view.peaks = null;
+  form.start = 0;
+  form.end = record.duration;
+  form.remove = decisionRemoveSet(record);
+  if (record.decision && record.decision.action === 'edit') {
+    form.start = record.decision.start;
+    form.end = record.decision.end;
+  }
+  $('empty').hidden = true;
+  $('work').hidden = false;
+  $('filetitle').textContent = record.file;
+  $('priority').textContent = record.priority || (record.decision ? '已处理' : '抽查');
+  $('priority').className = 'tag ' + (record.priority || (record.decision ? 'done' : ''));
+  $('reasons').textContent = reasonText(record) || '未进入自动复核队列';
+  $('text').textContent = record.text;
+  $('start').max = record.duration.toFixed(3);
+  $('end').max = record.duration.toFixed(3);
+  $('start').value = form.start.toFixed(2);
+  $('end').value = form.end.toFixed(2);
+  $('status').textContent = record.decision
+    ? `上次保存：${record.decision.reviewed_at}，输出 ${fmt(record.decision.output_s)}`
+    : `自动切边 ${fmt(record.duration)}；原片 ${fmt(record.source_duration)}，片头移除 ${fmt(record.head_removed)}，片尾移除 ${fmt(record.tail_removed)}`;
+  renderIntervals();
+  renderList();
+  resetPlayer();
+  try {
+    const cacheKey = record.file;
+    if (!view.waveformCache.has(cacheKey)) {
+      view.waveformCache.set(cacheKey, await (await api('/api/waveform/' + encodeURIComponent(record.file))).json());
+    }
+    if (view.current && view.current.file === record.file) {
+      view.peaks = view.waveformCache.get(cacheKey).peaks;
+      drawWave();
+    }
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+function renderIntervals() {
+  const box = $('intervals');
+  box.replaceChildren();
+  if (!view.current || !view.current.internal.length) {
+    box.textContent = '未检测到 ≥0.8s 的句中停顿。';
+    updateDuration();
+    return;
+  }
+  view.current.internal.forEach((run, index) => {
+    const row = document.createElement('div');
+    row.className = 'interval';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = form.remove.has(index);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) form.remove.add(index); else form.remove.delete(index);
+      updateDuration(); drawWave();
+    });
+    const label = document.createElement('label');
+    label.textContent = `移除 ${fmt(run.duration)} 停顿（${fmt(run.start)} → ${fmt(run.end)}）`;
+    label.prepend(checkbox);
+    const code = document.createElement('code');
+    code.textContent = `保留 ${fmt(PAD * 2)} 边缘`;
+    row.append(label, code);
+    box.appendChild(row);
+  });
+  updateDuration();
+}
+
+function effectiveDuration() {
+  let output = Math.max(0, form.end - form.start);
+  for (const index of form.remove) {
+    const run = view.current && view.current.internal[index];
+    if (!run) continue;
+    const cutStart = Math.max(form.start, run.start + PAD);
+    const cutEnd = Math.min(form.end, run.end - PAD);
+    if (cutEnd > cutStart) output -= cutEnd - cutStart;
+  }
+  return output;
+}
+
+function updateDuration() {
+  $('duration').textContent = `保留 ${fmt(form.start)} → ${fmt(form.end)}，输出约 ${fmt(effectiveDuration())}`;
+  $('start').value = form.start.toFixed(2);
+  $('end').value = form.end.toFixed(2);
+}
+
+function setupCanvas() {
+  const canvas = $('wave');
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(300, canvas.clientWidth);
+  const height = Math.max(160, canvas.clientHeight);
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  return { ctx, width, height };
+}
+
+function drawWave() {
+  if (!view.current || !view.peaks) return;
+  const { ctx, width, height } = setupCanvas();
+  const peaks = view.peaks;
+  const duration = view.current.duration || 1;
+  const xOf = (seconds) => Math.max(0, Math.min(width, seconds / duration * width));
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#0b0f0c';
+  ctx.fillRect(0, 0, width, height);
+
+  for (const run of view.current.internal) {
+    ctx.fillStyle = 'rgba(226,168,79,.15)';
+    ctx.fillRect(xOf(run.start), 0, Math.max(1, xOf(run.end) - xOf(run.start)), height);
+  }
+
+  const mid = height / 2;
+  const step = Math.max(1, width / peaks.length);
+  for (let i = 0; i < peaks.length; i += 1) {
+    const time = i / peaks.length * duration;
+    const active = time >= form.start && time <= form.end;
+    ctx.fillStyle = active ? 'rgba(115,211,155,.82)' : 'rgba(148,166,155,.25)';
+    const [low, high] = peaks[i];
+    const y1 = mid - high * (height * .44);
+    const y2 = mid - low * (height * .44);
+    ctx.fillRect(i * step, y1, Math.max(1, step), Math.max(1, y2 - y1));
+  }
+
+  ctx.strokeStyle = '#466052';
+  ctx.beginPath();
+  ctx.moveTo(0, mid);
+  ctx.lineTo(width, mid);
+  ctx.stroke();
+
+  for (const [time, color] of [[form.start, '#73d39b'], [form.end, '#e17979']]) {
+    const x = xOf(time);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.fillRect(x - 4, 0, 8, 8);
+  }
+}
+
+function timeFromPointer(event) {
+  const canvas = $('wave');
+  const rect = canvas.getBoundingClientRect();
+  return Math.max(0, Math.min(view.current.duration, (event.clientX - rect.left) / rect.width * view.current.duration));
+}
+
+async function pointerDown(event) {
+  if (!view.current || !view.peaks) return;
+  const time = timeFromPointer(event);
+  const startDistance = Math.abs(time - form.start);
+  const endDistance = Math.abs(time - form.end);
+  view.dragging = startDistance <= endDistance ? 'start' : 'end';
+  $('wave').setPointerCapture(event.pointerId);
+  applyDrag(time);
+}
+
+function pointerMove(event) {
+  if (!view.dragging) return;
+  applyDrag(timeFromPointer(event));
+}
+
+function applyDrag(time) {
+  if (view.dragging === 'start') {
+    form.start = Math.min(time, form.end - 0.05);
+    form.start = Math.max(0, form.start);
+  } else {
+    form.end = Math.max(time, form.start + 0.05);
+    form.end = Math.min(view.current.duration, form.end);
+  }
+  updateDuration();
+  drawWave();
+}
+
+function pointerUp() { view.dragging = null; }
+
+function resetPlayer() {
+  if (view.previewUrl) { URL.revokeObjectURL(view.previewUrl); view.previewUrl = null; }
+  const player = $('player');
+  player.pause();
+  player.src = '/api/audio/' + encodeURIComponent(view.current.file);
+  player.load();
+}
+
+function payload(action = 'edit') {
+  return {
+    file: view.current.file,
+    action,
+    start: form.start,
+    end: form.end,
+    remove_intervals: [...form.remove].map((index) => {
+      const run = view.current.internal[index];
+      return {start: run.start, end: run.end};
+    }),
+  };
+}
+
+async function previewEdit() {
+  if (!view.current) return;
+  try {
+    const response = await api('/api/preview', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload('edit')),
+    });
+    const blob = await response.blob();
+    if (view.previewUrl) URL.revokeObjectURL(view.previewUrl);
+    view.previewUrl = URL.createObjectURL(blob);
+    const player = $('player');
+    player.pause();
+    player.src = view.previewUrl;
+    await player.play();
+    toast('正在试听当前剪辑。');
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function saveAction(action) {
+  if (!view.current) return;
+  if (action === 'drop' && !confirm(`确定排除 ${view.current.file}？`)) return;
+  try {
+    await api('/api/save', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload(action)),
+    });
+    toast(action === 'drop' ? '已排除。' : '已保存。');
+    view.current = null;
+    await loadState();
+    const first = filteredRecords()[0];
+    if (first) await selectFile(first.file);
+    else {
+      $('work').hidden = true;
+      $('empty').hidden = false;
+      $('empty').textContent = '当前筛选下已全部处理完。';
+    }
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function resetDecision() {
+  if (!view.current || !view.current.decision) return;
+  if (!confirm(`撤销 ${view.current.file} 的保存结果？`)) return;
+  try {
+    await api('/api/reset', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({file: view.current.file}),
+    });
+    const file = view.current.file;
+    view.current = null;
+    toast('已撤销。');
+    await loadState();
+    await selectFile(file);
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+function nextClip() {
+  const records = filteredRecords();
+  if (!records.length) return;
+  const index = records.findIndex((r) => view.current && r.file === view.current.file);
+  const next = records[(index + 1) % records.length];
+  selectFile(next.file);
+}
+
+$('filter').addEventListener('change', (event) => {
+  state.filter = event.target.value;
+  view.current = null;
+  $('work').hidden = true;
+  $('empty').hidden = false;
+  $('empty').textContent = '从左侧选择一条音频开始。';
+  renderList();
+  const first = filteredRecords()[0];
+  if (first) selectFile(first.file);
+});
+$('start').addEventListener('change', (event) => {
+  form.start = Math.max(0, Math.min(Number(event.target.value), form.end - 0.05));
+  updateDuration(); drawWave();
+});
+$('end').addEventListener('change', (event) => {
+  form.end = Math.min(view.current.duration, Math.max(Number(event.target.value), form.start + 0.05));
+  updateDuration(); drawWave();
+});
+$('wave').addEventListener('pointerdown', pointerDown);
+$('wave').addEventListener('pointermove', pointerMove);
+$('wave').addEventListener('pointerup', pointerUp);
+$('wave').addEventListener('pointercancel', pointerUp);
+window.addEventListener('resize', drawWave);
+$('hearOriginal').addEventListener('click', async () => {
+  resetPlayer();
+  try { await $('player').play(); } catch (_) {}
+});
+$('preview').addEventListener('click', previewEdit);
+$('save').addEventListener('click', () => saveAction('edit'));
+$('keep').addEventListener('click', () => saveAction('keep'));
+$('drop').addEventListener('click', () => saveAction('drop'));
+$('reset').addEventListener('click', resetDecision);
+$('next').addEventListener('click', nextClip);
+document.addEventListener('keydown', (event) => {
+  if (event.target.matches('input, select, textarea, button')) return;
+  if (event.code === 'Space') {
+    event.preventDefault();
+    const player = $('player');
+    if (player.paused) player.play(); else player.pause();
+  } else if (event.key.toLowerCase() === 'n') {
+    nextClip();
+  }
+});
+
+loadState(true).catch((error) => toast(error.message, true));
+</script>
+</body>
+</html>

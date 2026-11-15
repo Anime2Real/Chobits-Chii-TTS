@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>小叽文本听辨修正</title>
+<style>
+  :root {
+    --bg:#111512; --panel:#18201b; --panel2:#1f2a23; --line:#34443a;
+    --text:#e8efe9; --muted:#94a69b; --green:#73d39b; --green2:#2f7a50;
+    --orange:#e2a84f; --red:#e17979;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.55 system-ui,"Noto Sans SC",sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); background:#0d110e;
+           display:flex; align-items:baseline; gap:18px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:18px; letter-spacing:.03em; }
+  .stats { color:var(--muted); font-variant-numeric:tabular-nums; }
+  main { display:grid; grid-template-columns:minmax(260px,360px) 1fr;
+         height:calc(100vh - 58px); }
+  aside { border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
+  .filters { padding:10px; border-bottom:1px solid var(--line); }
+  select,button,textarea { background:var(--panel2); color:var(--text);
+    border:1px solid var(--line); border-radius:6px; font:inherit; }
+  select,button { padding:7px 9px; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--green2); }
+  button.primary { background:var(--green2); border-color:var(--green); color:white; }
+  button.danger { color:var(--red); }
+  button:disabled { opacity:.45; cursor:default; }
+  #list { overflow:auto; flex:1; }
+  .item { width:100%; text-align:left; border:0; border-bottom:1px solid #222c25;
+          border-radius:0; padding:9px 12px; background:transparent; }
+  .item:hover,.item.active { background:#223129; }
+  .name { display:flex; justify-content:space-between; gap:8px; }
+  .file { color:var(--muted); font:12px ui-monospace,monospace; }
+  .preview { color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tag { display:inline-block; border:1px solid var(--line); border-radius:999px;
+         padding:1px 6px; font-size:11px; color:var(--muted); }
+  .tag.P0 { color:var(--red); border-color:#734040; }
+  .tag.P1 { color:var(--orange); border-color:#6e5730; }
+  .tag.done { color:var(--green); border-color:#376a4d; }
+  #editor { overflow:auto; padding:18px 22px 50px; min-width:0; }
+  .empty { color:var(--muted); text-align:center; padding:70px 10px; }
+  .head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .filetitle { font:15px ui-monospace,monospace; }
+  .reason { color:var(--muted); margin:8px 0; }
+  .current { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+             padding:12px; margin:14px 0; }
+  .current h2, label h2 { font-size:12px; color:var(--muted); margin:0 0 7px; font-weight:600; }
+  .current p { margin:0; font-size:18px; }
+  .translation { color:#a9c7b4; font-size:14px; margin-top:7px !important; }
+  audio { width:100%; margin:10px 0; }
+  .asr-box { background:#151d20; border:1px solid #304653; border-radius:8px;
+             padding:12px; margin:8px 0 14px; }
+  .asr-box > h2 { font-size:12px; color:#8fb8cd; margin:0 0 5px; font-weight:600; }
+  .candidate { border-top:1px solid #2b3d46; padding:10px 0 6px; }
+  .candidate:first-of-type { border-top:0; }
+  .candidate-head { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .candidate-head b { font-family:ui-monospace,monospace; }
+  .candidate-head button { padding:3px 8px; font-size:12px; }
+  .candidate p { margin:5px 0; }
+  .candidate .jp { font-size:17px; }
+  .candidate .zh { color:#a9c7b4; font-size:14px; }
+  .candidate .meta { color:var(--muted); font-size:12px; }
+  .candidate .tag { margin-left:auto; }
+  textarea { width:100%; min-height:120px; resize:vertical; padding:10px 12px;
+             font-size:18px; line-height:1.55; }
+  .actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }
+  .status { color:var(--muted); margin-top:12px; min-height:22px; }
+  .hint { color:var(--muted); font-size:12px; margin-top:6px; }
+  .toast { position:fixed; right:22px; bottom:22px; max-width:420px; background:#25352b;
+           border:1px solid var(--green2); border-radius:8px; padding:10px 14px;
+           opacity:0; pointer-events:none; transition:opacity .15s; }
+  .toast.show { opacity:1; } .toast.error { background:#342020; border-color:#7a3f3f; }
+  @media (max-width:850px) {
+    main { grid-template-columns:1fr; height:auto; }
+    aside { max-height:38vh; border-right:0; border-bottom:1px solid var(--line); }
+    #editor { padding:14px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>小叽文本听辨修正</h1>
+  <div id="stats" class="stats">加载中</div>
+</header>
+<main>
+  <aside>
+    <div class="filters">
+      <select id="filter">
+        <option value="pending">待处理</option>
+        <option value="all">全部</option>
+        <option value="keep">已保留</option>
+        <option value="fix">已修正</option>
+        <option value="drop">已排除</option>
+      </select>
+    </div>
+    <div id="list"></div>
+  </aside>
+  <section id="editor">
+    <div id="empty" class="empty">从左侧选择一条音频开始。</div>
+    <div id="work" hidden>
+      <div class="head">
+        <div><span id="priority" class="tag"></span>
+          <span id="filetitle" class="filetitle"></span></div>
+        <div class="reason" id="reason"></div>
+      </div>
+      <div class="current">
+        <h2>当前训练文本</h2>
+        <p id="currentText"></p>
+        <p id="currentZh" class="translation"></p>
+      </div>
+      <audio id="player" controls preload="none"></audio>
+      <div id="asrBox" class="asr-box" hidden>
+        <h2>双模型转写候选（自动生成，仍以音频为准）</h2>
+        <div id="asrMeta" class="hint"></div>
+        <article class="candidate" id="qwenCard">
+          <div class="candidate-head">
+            <b>Qwen3-ASR</b>
+            <button data-use="qwen_text">采用</button>
+            <span id="qwenTag" class="tag"></span>
+          </div>
+          <p id="qwenText" class="jp"></p>
+          <p id="qwenZh" class="zh"></p>
+        </article>
+        <article class="candidate" id="whisperCard">
+          <div class="candidate-head">
+            <b>Whisper large-v3</b>
+            <button data-use="whisper_text">采用</button>
+            <span id="whisperTag" class="tag"></span>
+          </div>
+          <p id="whisperText" class="jp"></p>
+          <p id="whisperZh" class="zh"></p>
+        </article>
+        <button id="useConsensus">采用推荐文本</button>
+      </div>
+      <label for="corrected"><h2>听辨后的文本</h2></label>
+      <textarea id="corrected" spellcheck="false" placeholder="按音频实际发音填写"></textarea>
+      <p class="hint">只有点击“保存修正”才会改文本；高一致度候选会预填，中低一致度默认保留原文，请先试听再采用候选。不要自动修掉角色刻意的拖音或口误。</p>
+      <div class="actions">
+        <button id="keep">保留原文并下一条</button>
+        <button id="fix" class="primary">保存修正并下一条</button>
+        <button id="drop" class="danger">排除此条</button>
+        <button id="reset">撤销已保存结果</button>
+        <button id="next">下一条</button>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+  </section>
+</main>
+<div id="toast" class="toast"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const reasons = {
+  '中日文混杂且语义异常':'中日文混杂，文本可能被错误转写',
+  '数字混入且语义异常':'数字或符号可能被误认成称呼',
+  '疑似误转写':'疑似 Whisper 误转写，请以实际发音为准',
+  '句首疑似误转写':'句首可能是称呼或误转写',
+  '疑似残句':'疑似残句，确认是否应排除',
+  '异常词形':'词形异常，确认实际发音',
+  '人名误转写':'人名可能错误，请核对发音',
+  '称呼误转写':'称呼可能错误，请核对',
+  '称呼写法': '称呼写法可能不统一',
+};
+let state = {records:[], stats:{}};
+let filter = 'pending';
+let current = null;
+let toastTimer = null;
+
+async function api(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { msg = (await res.json()).error || msg; } catch (_) {}
+    throw new Error(msg);
+  }
+  return res;
+}
+
+function toast(msg, error=false) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = 'toast show' + (error ? ' error' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = 'toast'; }, 3200);
+}
+
+function filtered() {
+  const rank = {P0:0, P1:1, P2:2};
+  return state.records.filter((r) => {
+    if (filter === 'pending') return !r.action;
+    if (filter === 'all') return true;
+    return r.action === filter;
+  }).sort((a,b) => (rank[a.priority] ?? 9) - (rank[b.priority] ?? 9)
+      || a.file.localeCompare(b.file));
+}
+
+function renderStats() {
+  const s = state.stats;
+  $('stats').textContent = `待处理 ${s.pending} / ${s.total} · 保留 ${s.keep} · 修正 ${s.fix} · 排除 ${s.drop}`;
+}
+
+function renderList() {
+  const list = $('list');
+  list.replaceChildren();
+  const records = filtered();
+  if (!records.length) {
+    const div = document.createElement('div');
+    div.className = 'empty';
+    div.textContent = filter === 'pending' ? '待处理已清空。' : '当前筛选没有记录。';
+    list.appendChild(div);
+    return;
+  }
+  for (const r of records) {
+    const b = document.createElement('button');
+    b.className = 'item' + (current && current.file === r.file ? ' active' : '');
+    b.addEventListener('click', () => select(r.file));
+    const top = document.createElement('div');
+    top.className = 'name';
+    const file = document.createElement('span');
+    file.className = 'file';
+    file.textContent = r.file;
+    const tag = document.createElement('span');
+    tag.className = 'tag ' + (r.action ? 'done' : r.priority);
+    tag.textContent = r.action ? ({keep:'保留',fix:'已修正',drop:'排除'}[r.action]) : r.priority;
+    top.append(file, tag);
+    const p = document.createElement('div');
+    p.className = 'preview';
+    p.textContent = r.current_text;
+    b.append(top, p);
+    list.appendChild(b);
+  }
+}
+
+async function loadState(selectFirst=false) {
+  const data = await (await api('/api/state')).json();
+  state = data;
+  renderStats();
+  renderList();
+  if (selectFirst && !current) {
+    const first = filtered()[0];
+    if (first) await select(first.file);
+    else showEmpty();
+  }
+}
+
+function showEmpty() {
+  current = null;
+  $('work').hidden = true;
+  $('empty').hidden = false;
+  $('empty').textContent = filter === 'pending' ? '待处理已全部完成。' : '当前筛选没有记录。';
+  renderList();
+}
+
+async function select(file) {
+  const r = state.records.find((x) => x.file === file);
+  if (!r) return;
+  current = r;
+  $('empty').hidden = true;
+  $('work').hidden = false;
+  renderList();
+  $('filetitle').textContent = r.file;
+  $('priority').textContent = r.priority;
+  $('priority').className = 'tag ' + r.priority;
+  $('reason').textContent = r.reason;
+  $('currentText').textContent = r.current_text;
+  const asr = r.asr;
+  $('currentZh').textContent = asr && asr.current_zh ? asr.current_zh : '';
+  renderAsr(asr);
+  $('corrected').value = r.action === 'fix'
+    ? r.verified_text
+    : (asr && asr.confidence === 'high' && asr.consensus_text
+        ? asr.consensus_text
+        : r.current_text);
+  $('player').src = '/api/audio/' + encodeURIComponent(r.file);
+  $('status').textContent = r.action
+    ? `上次保存：${r.reviewed_at} · ${({keep:'保留原文',fix:'修正文本',drop:'排除'})[r.action]}`
+    : '尚未处理。';
+}
+
+function renderAsr(asr) {
+  const box = $('asrBox');
+  if (!asr) { box.hidden = true; return; }
+  box.hidden = false;
+  const notes = {
+    models_disagree: '两个模型结果不一致',
+    low_confidence: '一致度低',
+    qwen_empty: 'Qwen 无输出',
+    whisper_empty: 'Whisper 无输出',
+  };
+  const noteText = (asr.notes || '').split('+').filter(Boolean)
+    .map((x) => notes[x] || x).join(' · ');
+  const agreement = Number.isFinite(Number(asr.agreement))
+    ? `${(Number(asr.agreement) * 100).toFixed(0)}%` : '—';
+  $('asrMeta').textContent = `两个模型的文本一致度 ${agreement} · 置信度 ${asr.confidence || '—'}${noteText ? ' · ' + noteText : ''}`;
+  const qwen = asr.qwen_text || '';
+  const whisper = asr.whisper_text || '';
+  $('qwenCard').hidden = !qwen;
+  $('qwenText').textContent = qwen;
+  $('qwenZh').textContent = asr.qwen_zh || '';
+  $('qwenTag').textContent = asr.confidence || '';
+  $('whisperCard').hidden = !whisper;
+  $('whisperText').textContent = whisper;
+  $('whisperZh').textContent = asr.whisper_zh || '';
+  $('whisperTag').textContent = '交叉验证';
+  $('useConsensus').disabled = !(asr.consensus_text || '');
+}
+
+function useCandidate(field) {
+  if (!current || !current.asr) return;
+  const value = current.asr[field] || '';
+  if (!value) return;
+  $('corrected').value = value;
+  $('corrected').focus();
+  toast('已填入候选文本，请确认音频后再保存。');
+}
+
+function payload(action) {
+  return {
+    file: current.file,
+    action,
+    verified_text: $('corrected').value,
+  };
+}
+
+async function save(action) {
+  if (!current) return;
+  if (action === 'drop' && !confirm(`确定排除 ${current.file}？`)) return;
+  try {
+    await api('/api/save', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload(action)),
+    });
+    toast(action === 'keep' ? '已保留原文。' : action === 'fix' ? '已保存修正。' : '已排除。');
+    current = null;
+    await loadState();
+    const first = filtered()[0];
+    if (first) await select(first.file); else showEmpty();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function reset() {
+  if (!current || !current.action) return;
+  if (!confirm(`撤销 ${current.file} 的文本处理结果？`)) return;
+  try {
+    await api('/api/reset', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({file:current.file}),
+    });
+    const file = current.file;
+    current = null;
+    await loadState();
+    await select(file);
+    toast('已撤销。');
+  } catch (e) { toast(e.message, true); }
+}
+
+function next() {
+  if (!current) return;
+  const records = filtered();
+  const i = records.findIndex((r) => r.file === current.file);
+  if (!records.length) return;
+  select(records[(i + 1) % records.length].file);
+}
+
+document.querySelectorAll('[data-use]').forEach((button) => {
+  button.addEventListener('click', () => useCandidate(button.dataset.use));
+});
+$('useConsensus').addEventListener('click', () => useCandidate('consensus_text'));
+$('filter').addEventListener('change', (e) => {
+  filter = e.target.value;
+  current = null;
+  showEmpty();
+  const first = filtered()[0];
+  if (first) select(first.file);
+});
+$('keep').addEventListener('click', () => save('keep'));
+$('fix').addEventListener('click', () => save('fix'));
+$('drop').addEventListener('click', () => save('drop'));
+$('reset').addEventListener('click', reset);
+$('next').addEventListener('click', next);
+document.addEventListener('keydown', (e) => {
+  if (e.target.matches('textarea, input, select, button')) return;
+  if (e.key.toLowerCase() === 'n') next();
+});
+loadState(true).catch((e) => toast(e.message, true));
+</script>
+</body>
+</html>

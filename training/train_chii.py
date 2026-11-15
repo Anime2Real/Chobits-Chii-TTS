@@ -10,7 +10,8 @@
 
 用法 (在 GPT-SoVITS 目录下运行, 或任意目录, 脚本会自行定位):
   conda activate GPTSoVits
-  python training/train_chii.py [--skip-preprocess] [--skip-s2] [--skip-s1] [--force]
+  python training/train_chii.py [--list PATH] [--wav-dir DIR] \
+      [--skip-preprocess] [--skip-s2] [--skip-s1] [--force]
 
 幂等语义: 预处理各步以 .done-{step}.json 标记 (记录输入内容哈希) 判定完成,
 标记与产物齐全才跳过; --force 忽略标记重跑预处理。
@@ -248,6 +249,7 @@ def train_s2() -> None:
     cfg["name"] = EXP_NAME
     cfg["version"] = VERSION
     os.makedirs(os.path.join(OPT_DIR, "logs_s2_v2Pro"), exist_ok=True)
+    os.makedirs(os.path.join(GS_ROOT, "SoVITS_weights_v2Pro"), exist_ok=True)
     os.makedirs(TMP_DIR, exist_ok=True)
     tmp_cfg = os.path.join(TMP_DIR, "tmp_s2.json")
     with open(tmp_cfg, "w", encoding="utf-8") as f:
@@ -284,6 +286,7 @@ def train_s1() -> None:
     cfg["train_phoneme_path"] = os.path.join(OPT_DIR, "2-name2text.txt")
     cfg["output_dir"] = os.path.join(OPT_DIR, "logs_s1_v2Pro")
     os.makedirs(cfg["output_dir"], exist_ok=True)
+    os.makedirs(os.path.join(GS_ROOT, "GPT_weights_v2Pro"), exist_ok=True)
     os.makedirs(TMP_DIR, exist_ok=True)
     tmp_cfg = os.path.join(TMP_DIR, "tmp_s1.yaml")
     with open(tmp_cfg, "w", encoding="utf-8") as f:
@@ -300,13 +303,31 @@ def train_s1() -> None:
 
 
 def main() -> None:
+    global EXP_NAME, LIST_PATH, WAV_DIR, OPT_DIR
     ap = argparse.ArgumentParser()
+    ap.add_argument("--exp-name", default=os.environ.get("CHII_EXP_NAME", EXP_NAME),
+                    help="实验名 (默认 chii; 决定 logs/ 与权重文件名)")
+    ap.add_argument("--list", default=os.environ.get("CHII_TRAIN_LIST", LIST_PATH),
+                    help="GPT-SoVITS 训练 list (默认 data/gpt_sovits.list)")
+    ap.add_argument("--wav-dir", default=os.environ.get("CHII_TRAIN_WAV_DIR", WAV_DIR),
+                    help="训练 wav 目录 (默认 data/wavs)")
     ap.add_argument("--skip-preprocess", action="store_true")
     ap.add_argument("--skip-s2", action="store_true")
     ap.add_argument("--skip-s1", action="store_true")
     ap.add_argument("--force", action="store_true",
                     help="忽略 .done 完成标记, 重跑全部预处理步骤 (训练步本就无跳过)")
     args = ap.parse_args()
+
+    if not args.exp_name or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in args.exp_name):
+        raise SystemExit("--exp-name 只能包含字母、数字、下划线和连字符")
+    EXP_NAME = args.exp_name
+    OPT_DIR = os.path.join(GS_ROOT, "logs", EXP_NAME)
+    LIST_PATH = os.path.abspath(args.list)
+    WAV_DIR = os.path.abspath(args.wav_dir)
+    if not os.path.isfile(LIST_PATH):
+        raise SystemExit(f"训练 list 不存在: {LIST_PATH}")
+    if not os.path.isdir(WAV_DIR):
+        raise SystemExit(f"训练 wav 目录不存在: {WAV_DIR}")
 
     for k, v in PRETRAINED.items():
         p = os.path.join(GS_ROOT, v)
