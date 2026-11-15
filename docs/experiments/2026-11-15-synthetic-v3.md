@@ -262,3 +262,5 @@ rm /opt/chobits/data/tts-cosy/model
 mv /opt/chobits/data/tts-cosy/model.chii-sft-20261115-170330 /opt/chobits/data/tts-cosy/model
 systemctl start chobits-tts-engine
 ```
+
+> 门面端点说明：`cosy-voice` 的 `6fbf34e` 起统一为 `/v1/tts/speech`，`/v1/audio/speech` 兼容别名已移除。上文 200 验证是在旧门面进程仍加载 `/v1/audio/speech` 时完成的；门面重启后请使用 `/v1/tts/speech`。
