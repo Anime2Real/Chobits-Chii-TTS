@@ -154,6 +154,8 @@ python3 -m http.server 8768
 - 2026-11-15 18:24 试听回滚：Cosy 模型回旧 SFT，参考改回 ep07（`ref_cosy_ep07.wav` / `ref_cosy_ep07.txt`）；GPT-SoVITS 继续用 ep18，两套参考分离。
 - 2026-11-15 18:43：Cosy 切到 `model-chii-mixed-v3` + ep07（新 SFT 权重、旧参考音频）；旧 SFT 备份保留。
 - 2026-11-15 19:22：GPT-SoVITS 与 CosyVoice3 统一切到 ep16 `ep16_01061.26s.wav`（3.147s，`ヒデキが元気じゃないと、チーも元気なくなる。`）。
+- 2026-11-15 19:45：GPT-SoVITS 改用 Extra `syn2_p261_s42`（5.69s，`ハッキングとは...`）；Cosy 保持 ep16。
+- 2026-11-15 20:01：Cosy 低合成占比重训完成 `chii_v1`（428 真实 + 89 v1，剔除 23 条 ep10-like），仅评测未切生产，见 `cosyvoice-mixed-v1.md`。
 
 ## 复现命令
 
@@ -246,7 +248,7 @@ python3 -m http.server 8769
 - `holdout_engines/compare.html`
 - `longform_engines/compare.html`
 
-生产当前是 CosyVoice3 mixed_v3 + ep16 参考（3.147s）；GPT-SoVITS 使用同一份 ep16。旧 SFT 保留为回滚点。生产引擎在评测期间临时停止，已恢复并用 `/v1/tts/speech` 实测 200。
+生产当前是 CosyVoice3 mixed_v3 + ep16 参考（3.147s）；GPT-SoVITS 使用 Extra `syn2_p261`（5.69s）。旧 SFT 保留为回滚点。Cosy `chii_v1` 重训模型已产出但只用于评测。生产引擎在评测期间临时停止，已恢复并用 `/v1/tts/speech` 实测 200。
 
 ### 生产切换（2026-11-15 17:03）
 
