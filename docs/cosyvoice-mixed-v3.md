@@ -72,6 +72,8 @@ python3 -m http.server 8769
   `ep16_01061.26s.wav`（3.147s，`ヒデキが元気じゃないと、チーも元気なくなる。`）。
 - 2026-11-15 20:15：试听确认 `chii_v1` 更好，Cosy 生产切到
   `model-chii-v1` + ep16；mixed_v3 成为上一版/回滚点。
+- 2026-11-15 20:30：参考音频 6 候选对比完成，**ep16 最终保留**；`ep08_00921` /
+  `extra_p261` 作为备选留档。
 - 当前 symlink：`/opt/chobits/data/tts-cosy/model -> model-chii-v1`。
 - 旧 SFT 备份：`model.chii-sft-20261115-170330`；mixed_v3 目录保留。
 - CosyVoice 参考：`ep16_01061.26s.wav` / `.txt`，由

@@ -92,8 +92,9 @@ http://192.168.100.213:8771/
 ## 切换与回滚
 
 2026-11-15 20:15：试听后确认 `chii_v1` 更好，**生产已切到 chii_v1 + ep16**。
-参考音频仍在比较中，候选页：`Chobits-Chii-TTS/outputs/eval/cosy_v1_refs/index.html`
-（`http://192.168.100.213:8772/`）。
+参考音频 6 候选对比后，**ep16 听感最合适，最终保留 ep16**；候选页留档：
+`Chobits-Chii-TTS/outputs/eval/cosy_v1_refs/index.html`（`http://192.168.100.213:8772/`）。
+备选：真实片段 `ep08_00921`，合成片段 `extra_p261`。
 
 切换命令：
 
