@@ -70,16 +70,24 @@ python3 -m http.server 8769
 - 2026-11-15 18:43：生产切到 `model-chii-mixed-v3` + ep07。
 - 2026-11-15 19:22：GPT-SoVITS 与 CosyVoice3 统一切到 ep16
   `ep16_01061.26s.wav`（3.147s，`ヒデキが元気じゃないと、チーも元気なくなる。`）。
-  当前生产为 `model-chii-mixed-v3` + ep16。
-- `model` 现在是 symlink：`/opt/chobits/data/tts-cosy/model -> model-chii-mixed-v3`。
-- 旧 SFT 备份：`model.chii-sft-20261115-170330`。
+- 2026-11-15 20:15：试听确认 `chii_v1` 更好，Cosy 生产切到
+  `model-chii-v1` + ep16；mixed_v3 成为上一版/回滚点。
+- 当前 symlink：`/opt/chobits/data/tts-cosy/model -> model-chii-v1`。
+- 旧 SFT 备份：`model.chii-sft-20261115-170330`；mixed_v3 目录保留。
 - CosyVoice 参考：`ep16_01061.26s.wav` / `.txt`，由
   `~/.config/chobits/chobits-chii-tts-cosy.env` 注入；GPT-SoVITS 使用 Extra `syn2_p261`。
 - 服务名：`chobits-tts-cosy-engine` / `chobits-tts-cosy-facade`。
-- `/healthz` 与 `/healthz/deep` 正常；mixed_v3 + ep16 实测合成 200。
+- `/healthz` 与 `/healthz/deep` 正常；chii_v1 + ep16 实测合成 200。
 - CosyVoice 不读取 `seed`。
 
-回滚到旧 SFT + ep16：
+回滚到 mixed_v3 + ep16：
+
+```bash
+ln -sfn model-chii-mixed-v3 /opt/chobits/data/tts-cosy/model
+sudo systemctl restart chobits-tts-cosy-engine
+```
+
+更早的旧 SFT 回滚：
 
 ```bash
 ln -sfn model.chii-sft-20261115-170330 /opt/chobits/data/tts-cosy/model

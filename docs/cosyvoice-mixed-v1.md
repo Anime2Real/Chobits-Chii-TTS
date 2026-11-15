@@ -91,7 +91,11 @@ http://192.168.100.213:8771/
 
 ## 切换与回滚
 
-新模型当前只用于评测，**没有切生产**。确认后切换：
+2026-11-15 20:15：试听后确认 `chii_v1` 更好，**生产已切到 chii_v1 + ep16**。
+参考音频仍在比较中，候选页：`Chobits-Chii-TTS/outputs/eval/cosy_v1_refs/index.html`
+（`http://192.168.100.213:8772/`）。
+
+切换命令：
 
 ```bash
 ln -sfn model-chii-v1 /opt/chobits/data/tts-cosy/model
