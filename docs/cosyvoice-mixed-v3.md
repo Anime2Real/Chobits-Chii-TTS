@@ -65,25 +65,27 @@ python3 -m http.server 8769
 
 ## 生产切换
 
-- 2026-11-15 17:03：生产模型曾切到 `model-chii-mixed-v3`，参考 ep18。
-- 2026-11-15 18:24：试听后认为 mixed_v3 不如旧版，生产回滚到旧 SFT `model.chii-sft-20261115-170330`，参考恢复为 ep07 `秀樹は地位を拾ってくれた`。
-- `model` 现在是 symlink：`/opt/chobits/data/tts-cosy/model -> model.chii-sft-20261115-170330`。
-- CosyVoice 参考：`ref_cosy_ep07.wav` / `ref_cosy_ep07.txt`，由
-  `~/.config/chobits/chobits-chii-tts-cosy.env` 注入；GPT-SoVITS 继续用 ep18，
+- 2026-11-15 17:03：曾切到 `model-chii-mixed-v3` + ep18。
+- 2026-11-15 18:24：试听后回滚到旧 SFT `model.chii-sft-20261115-170330` + ep07。
+- 2026-11-15 18:43：确定采用“**新 SFT + 旧参考**”，生产切到
+  `model-chii-mixed-v3` + ep07。当前生产即此组合。
+- `model` 现在是 symlink：`/opt/chobits/data/tts-cosy/model -> model-chii-mixed-v3`。
+- 旧 SFT 备份：`model.chii-sft-20261115-170330`。
+- CosyVoice 参考：`ref_cosy_ep07.wav` / `ref_cosy_ep07.txt`（`秀樹は地位を拾ってくれた`），
+  由 `~/.config/chobits/chobits-chii-tts-cosy.env` 注入；GPT-SoVITS 继续用 ep18，
   两套参考互不影响。
 - 服务名：`chobits-tts-cosy-engine` / `chobits-tts-cosy-facade`。
-- `/healthz` 与 `/healthz/deep` 正常；实测合成 200。
+- `/healthz` 与 `/healthz/deep` 正常；mixed_v3 + ep07 实测合成 200。
 - CosyVoice 不读取 `seed`。
 
-再切回 mixed_v3（模型目录保留）：
+回滚到旧 SFT + ep07：
 
 ```bash
-ln -sfn model-chii-mixed-v3 /opt/chobits/data/tts-cosy/model
+ln -sfn model.chii-sft-20261115-170330 /opt/chobits/data/tts-cosy/model
 sudo systemctl restart chobits-tts-cosy-engine
 ```
 
-若只想验证 mixed_v3 + ep07，保持 `chobits-chii-tts-cosy.env` 不变即可；若同时
-换参考，改该 env 的 `CHII_TTS_REF_AUDIO` / `CHII_TTS_REF_TEXT_FILE` 后重启
-`chobits-tts-cosy-facade`。
+参考音频由 `chobits-chii-tts-cosy.env` 决定；换参考时改该 env 的
+`CHII_TTS_REF_AUDIO` / `CHII_TTS_REF_TEXT_FILE` 后重启 `chobits-tts-cosy-facade`。
 
 完整实验记录（含 GPT-SoVITS、数据 v2/v3、seed 扫描）见 `gpt-sovits` 分支 `docs/experiments/2026-11-15-synthetic-v3.md`。
