@@ -1,7 +1,7 @@
 """构建 mixed_v3 的 CosyVoice SFT 数据目录.
 
 默认读取兄弟仓库 Chobits-Chii-TTS 的 data/trimmed/synth_v3/mixed:
-  451 真实 + 89 v1 + 281 v2
+  451 真实 + 89 v1 + 281 v3
 输出到 CosyVoice/examples/libritts/cosyvoice3/data/chii_mixed_{train,dev}.
 文本假名化方式与推理引擎一致 (pyopenjtalk NJD -> 空格分隔片假名).
 """

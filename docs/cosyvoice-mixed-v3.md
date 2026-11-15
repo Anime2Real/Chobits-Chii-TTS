@@ -2,7 +2,7 @@
 
 ## 数据
 
-- `mixed_v3`：451 真实 + 89 v1 合成 + 281 v2 合成 = 821 条。
+- `mixed_v3`：451 真实 + 89 v1 合成 + 281 v3 合成 = 821 条。
 - 真实留出集 24 条不进入训练。
 - 按 seed=1986 拆 `chii_mixed_train` 801 / `chii_mixed_dev` 20。
 - 文本用 pyopenjtalk 假名化，instruct 前缀与生产 shim 一致。
