@@ -152,6 +152,7 @@ python3 -m http.server 8768
 - 已重启 `chobits-tts-cosy-facade`，`/healthz` 返回 `{"status":"ok","model":"chii-tts"}`，`/v1/tts/speech` 实测返回 200 / 1.76s WAV。
 - 生产 CosyVoice A/B（8 句）：当前参考 F0 std/range 121/319，ep18 参考 161/390；ep18 参考的起伏更明显。
 - 2026-11-15 18:24 试听回滚：Cosy 模型回旧 SFT，参考改回 ep07（`ref_cosy_ep07.wav` / `ref_cosy_ep07.txt`）；GPT-SoVITS 继续用 ep18，两套参考分离。
+- 2026-11-15 18:43 最终组合：Cosy 切到 `model-chii-mixed-v3` + ep07（新 SFT 权重、旧参考音频）；旧 SFT 备份保留。
 
 ## 复现命令
 
@@ -244,7 +245,7 @@ python3 -m http.server 8769
 - `holdout_engines/compare.html`
 - `longform_engines/compare.html`
 
-生产当前是 CosyVoice3 旧 SFT + ep07 参考；mixed_v3 已试听回滚。生产引擎在评测期间临时停止，已恢复并用 `/v1/tts/speech` 实测 200。
+生产当前是 CosyVoice3 mixed_v3 + ep07 参考（新 SFT 权重、旧参考音频）；旧 SFT 保留为回滚点。生产引擎在评测期间临时停止，已恢复并用 `/v1/tts/speech` 实测 200。
 
 ### 生产切换（2026-11-15 17:03）
 
