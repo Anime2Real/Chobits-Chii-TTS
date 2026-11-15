@@ -142,14 +142,14 @@ python3 -m http.server 8768
 
 ## 生产参考切换
 
-生产实际引擎：`chobits-tts-engine.service`，CosyVoice3 SFT，端口 3301；门面 `chobits-tts-facade.service`，端口 3300。
+生产实际引擎：`chobits-tts-cosy-engine.service`，CosyVoice3 SFT，端口 3301；门面 `chobits-tts-cosy-facade.service`，端口 3300。（2026-11-15 晚已按 `chobits-tts-<provider>-<role>` 规范改名。）
 
 - CosyVoice shim 接受 `seed` 字段但**忽略**，所以生产不存在 seed46 参数。
 - 2026-11-15 15:51 已将生产参考从原 `秀樹は地位を拾ってくれた` 切换为 ep18：
   - `/opt/chobits/data/tts-cosy/models/ref_audio.wav`
   - `/opt/chobits/data/tts-cosy/models/ref_text.txt`
   - 备份：同目录 `ref_audio.wav.bak-20261115-155156`、`ref_text.txt.bak-20261115-155156`
-- 已重启 `chobits-tts-facade`，`/healthz` 返回 `{"status":"ok","model":"chii-tts"}`，`/v1/audio/speech` 实测返回 200 / 1.76s WAV。
+- 已重启 `chobits-tts-cosy-facade`，`/healthz` 返回 `{"status":"ok","model":"chii-tts"}`，`/v1/tts/speech` 实测返回 200 / 1.76s WAV。
 - 生产 CosyVoice A/B（8 句）：当前参考 F0 std/range 121/319，ep18 参考 161/390；ep18 参考的起伏更明显。
 
 ## 复现命令
@@ -243,24 +243,26 @@ python3 -m http.server 8769
 - `holdout_engines/compare.html`
 - `longform_engines/compare.html`
 
-生产当前仍是 CosyVoice3 当前 SFT + ep18 参考；新模型尚未部署。生产引擎在评测期间临时停止，已恢复并用 `/v1/audio/speech` 实测 200。
+生产当前仍是 CosyVoice3 当前 SFT + ep18 参考；新模型尚未部署。生产引擎在评测期间临时停止，已恢复并用 `/v1/tts/speech` 实测 200。
 
 ### 生产切换（2026-11-15 17:03）
 
-- 停 `chobits-tts-engine`，备份当前 SFT 模型目录：
+- 停 `chobits-tts-cosy-engine`，备份当前 SFT 模型目录：
   `/opt/chobits/data/tts-cosy/model` -> `/opt/chobits/data/tts-cosy/model.chii-sft-20261115-170330`
 - 新模型固定到 `/opt/chobits/data/tts-cosy/model-chii-mixed-v3`；`model` 改为指向它的 symlink。
 - 参考音频保持 ep18（`/opt/chobits/data/tts-cosy/models/ref_audio.wav`）。
-- 重启引擎后日志显示 `model loaded, sample_rate=24000, cuda=True`；`/healthz` 正常；`/v1/audio/speech` 实测 200，输出 1.72s WAV。
+- 重启引擎后日志显示 `model loaded, sample_rate=24000, cuda=True`；`/healthz` 正常；`/v1/tts/speech` 实测 200，输出 1.72s WAV。
 - 工作区原模型路径 `Chobits-Chii-TTS-cosy/CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B-chii-mixed` 保留为指向生产模型目录的 symlink。
 
 回滚：
 
 ```bash
-systemctl stop chobits-tts-engine
+systemctl stop chobits-tts-cosy-engine
 rm /opt/chobits/data/tts-cosy/model
 mv /opt/chobits/data/tts-cosy/model.chii-sft-20261115-170330 /opt/chobits/data/tts-cosy/model
-systemctl start chobits-tts-engine
+systemctl start chobits-tts-cosy-engine
 ```
 
 > 门面端点说明：`cosy-voice` 的 `6fbf34e` 起统一为 `/v1/tts/speech`，`/v1/audio/speech` 兼容别名已移除。上文 200 验证是在旧门面进程仍加载 `/v1/audio/speech` 时完成的；门面重启后请使用 `/v1/tts/speech`。
+>
+> 2026-11-15 晚双引擎上线后：对外默认 `/v1/tts/speech` → CosyVoice3；GPT-SoVITS 走 `/v1/tts/gpt/speech`。生产单元为 `chobits-tts-cosy-{engine,facade}` 与 `chobits-tts-gpt-{engine,facade}`，端口 3301/3300 与 3303/3302。

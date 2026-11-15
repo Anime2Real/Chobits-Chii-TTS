@@ -245,7 +245,7 @@ VOICES = {
         "prompt_lang": "ja",
     },
 }
-TTS_MODEL = "chii-tts"
+TTS_MODEL = _getenv("MODEL", "chii-tts")
 # OpenAI response_format → 引擎 media_type; mp3/flac/pcm 暂不支持 (引擎侧只收 wav/raw/ogg/aac).
 # "opus" 映射到引擎 media_type=ogg, 而引擎以 sf.SoundFile(format="ogg") 写文件且未指定
 # subtype —— libsndfile 的 Ogg 默认编码是 Vorbis, 故容器是 Ogg、编码并非 Opus
