@@ -53,6 +53,8 @@ def main():
                         help='CosyVoice examples/libritts/cosyvoice3/data 目录')
     parser.add_argument('--dev-size', type=int, default=20)
     parser.add_argument('--seed', type=int, default=1986)
+    parser.add_argument('--name-prefix', default='chii_mixed',
+                        help='输出数据目录前缀，例如 chii_v1 -> chii_v1_train/dev')
     args = parser.parse_args()
 
     mixed = Path(args.mixed_dir)
@@ -89,8 +91,8 @@ def main():
     random.seed(args.seed)
     random.shuffle(rows)
     dev, train = rows[:args.dev_size], rows[args.dev_size:]
-    write_split(des_base, 'chii_mixed_train', train)
-    write_split(des_base, 'chii_mixed_dev', dev)
+    write_split(des_base, f'{args.name_prefix}_train', train)
+    write_split(des_base, f'{args.name_prefix}_dev', dev)
     print('sample train:', train[0])
     print('sample dev:', dev[0])
 

@@ -74,7 +74,7 @@ python3 -m http.server 8769
 - `model` 现在是 symlink：`/opt/chobits/data/tts-cosy/model -> model-chii-mixed-v3`。
 - 旧 SFT 备份：`model.chii-sft-20261115-170330`。
 - CosyVoice 参考：`ep16_01061.26s.wav` / `.txt`，由
-  `~/.config/chobits/chobits-chii-tts-cosy.env` 注入；GPT-SoVITS 使用同一份 ep16。
+  `~/.config/chobits/chobits-chii-tts-cosy.env` 注入；GPT-SoVITS 使用 Extra `syn2_p261`。
 - 服务名：`chobits-tts-cosy-engine` / `chobits-tts-cosy-facade`。
 - `/healthz` 与 `/healthz/deep` 正常；mixed_v3 + ep16 实测合成 200。
 - CosyVoice 不读取 `seed`。
@@ -90,3 +90,6 @@ sudo systemctl restart chobits-tts-cosy-engine
 `CHII_TTS_REF_AUDIO` / `CHII_TTS_REF_TEXT_FILE` 后重启 `chobits-tts-cosy-facade`。
 
 完整实验记录（含 GPT-SoVITS、数据 v2/v3、seed 扫描）见 `gpt-sovits` 分支 `docs/experiments/2026-11-15-synthetic-v3.md`。
+
+后续低合成占比重训（428 真实 + 89 v1，剔除 23 条 ep10-like）见
+[`cosyvoice-mixed-v1.md`](./cosyvoice-mixed-v1.md)；该模型只用于评测，尚未切生产。
