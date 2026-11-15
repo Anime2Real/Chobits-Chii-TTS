@@ -74,18 +74,18 @@ def fake_engine(monkeypatch):
 # --- 鉴权 --------------------------------------------------------------------
 
 def test_speech_no_key_401(client):
-    resp = client.post("/v1/audio/speech", json={"input": "hi", "voice": "chii"})
+    resp = client.post("/v1/tts/speech", json={"input": "hi", "voice": "chii"})
     assert resp.status_code == 401
 
 
 def test_speech_wrong_key_401(client):
-    resp = client.post("/v1/audio/speech", json={"input": "hi", "voice": "chii"},
+    resp = client.post("/v1/tts/speech", json={"input": "hi", "voice": "chii"},
                        headers={"Authorization": "Bearer wrong-key"})
     assert resp.status_code == 401
 
 
 def test_speech_query_api_key_no_longer_accepted(client):
-    resp = client.post("/v1/audio/speech?api_key=" + API_KEY,
+    resp = client.post("/v1/tts/speech?api_key=" + API_KEY,
                        json={"input": "hi", "voice": "chii"})
     assert resp.status_code == 401
 
@@ -121,9 +121,9 @@ def test_healthz_deep_requires_key(client, fake_engine):
 def test_rate_limit_429(client, monkeypatch):
     # 鉴权失败也计桶：小限额下前两次 401，第三次 429
     monkeypatch.setattr(server, "RATE_LIMIT", 2)
-    assert client.post("/v1/audio/speech", json={"input": "hi"}).status_code == 401
-    assert client.post("/v1/audio/speech", json={"input": "hi"}).status_code == 401
-    resp = client.post("/v1/audio/speech", json={"input": "hi"})
+    assert client.post("/v1/tts/speech", json={"input": "hi"}).status_code == 401
+    assert client.post("/v1/tts/speech", json={"input": "hi"}).status_code == 401
+    resp = client.post("/v1/tts/speech", json={"input": "hi"})
     assert resp.status_code == 429
     assert resp.json()["message"] == "rate limit exceeded"
 
@@ -132,9 +132,9 @@ def test_rate_limit_does_not_count_other_paths(client, monkeypatch):
     monkeypatch.setattr(server, "RATE_LIMIT", 1)
     client.get("/v1/models")
     client.get("/v1/models")
-    # /v1/models 不限流，只计 /tts 与 /v1/audio/speech
-    assert client.post("/v1/audio/speech", json={"input": "hi"}).status_code == 401
-    assert client.post("/v1/audio/speech", json={"input": "hi"}).status_code == 429
+    # /v1/models 不限流，只计 /tts 与 /v1/tts/speech
+    assert client.post("/v1/tts/speech", json={"input": "hi"}).status_code == 401
+    assert client.post("/v1/tts/speech", json={"input": "hi"}).status_code == 429
 
 
 # --- 引擎错误通用化（与 ASR 门面对齐：错误体脱敏，细节只进服务端日志） -------------
@@ -174,7 +174,7 @@ def test_tts_engine_unreachable_502_generic(client, monkeypatch):
 def test_speech_wav_upstream_unreachable_502(client, monkeypatch):
     # wav 流式预读首块即上游不可达：状态码同样对齐 502（此前 503）
     monkeypatch.setattr(server, "_client", FakeEngineClient(exc=httpx.ConnectError("refused")))
-    resp = client.post("/v1/audio/speech",
+    resp = client.post("/v1/tts/speech",
                        json={"input": "テストです", "voice": "chii", "response_format": "wav"},
                        headers=AUTH)
     assert resp.status_code == 502
@@ -219,7 +219,7 @@ def test_tts_post_streaming_forwards_batch_size_1(client, fake_engine):
 
 
 def test_speech_wav_streams_with_batch_size_1(client, fake_engine):
-    resp = client.post("/v1/audio/speech",
+    resp = client.post("/v1/tts/speech",
                        json={"input": "テストです", "voice": "chii", "response_format": "wav"},
                        headers=AUTH)
     assert resp.status_code == 200
@@ -230,7 +230,7 @@ def test_speech_wav_streams_with_batch_size_1(client, fake_engine):
 
 
 def test_speech_aac_uses_default_batch_size(client, fake_engine):
-    resp = client.post("/v1/audio/speech",
+    resp = client.post("/v1/tts/speech",
                        json={"input": "テストです", "voice": "chii", "response_format": "aac"},
                        headers=AUTH)
     assert resp.status_code == 200
@@ -240,14 +240,14 @@ def test_speech_aac_uses_default_batch_size(client, fake_engine):
 
 
 def test_speech_validation_errors(client, fake_engine):
-    assert client.post("/v1/audio/speech", json={"input": "", "voice": "chii"},
+    assert client.post("/v1/tts/speech", json={"input": "", "voice": "chii"},
                        headers=AUTH).status_code == 400
-    assert client.post("/v1/audio/speech", json={"input": "hi", "voice": "nobody"},
+    assert client.post("/v1/tts/speech", json={"input": "hi", "voice": "nobody"},
                        headers=AUTH).status_code == 400
-    assert client.post("/v1/audio/speech",
+    assert client.post("/v1/tts/speech",
                        json={"input": "hi", "voice": "chii", "response_format": "mp3"},
                        headers=AUTH).status_code == 400
-    assert client.post("/v1/audio/speech",
+    assert client.post("/v1/tts/speech",
                        json={"input": "hi", "voice": "chii", "speed": 9.0},
                        headers=AUTH).status_code == 400
     assert fake_engine.requests == []  # 校验失败不触引擎
@@ -257,7 +257,7 @@ def test_speech_validation_errors(client, fake_engine):
 def test_speech_all_punctuation_400(client, fake_engine, text):
     # 全标点输入（_split_sentences 为空）：客户端输入退化而非上游故障——
     # 直接 400（此前走到引擎 200 空流 → 门面 502），且不触引擎
-    resp = client.post("/v1/audio/speech",
+    resp = client.post("/v1/tts/speech",
                        json={"input": text, "voice": "chii"}, headers=AUTH)
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "no_synthesizable_text"
@@ -274,7 +274,7 @@ def _jam_inflight(monkeypatch):
 
 def test_speech_queue_timeout_openai_error_shape(client, monkeypatch):
     _jam_inflight(monkeypatch)
-    resp = client.post("/v1/audio/speech", json={"input": "hi", "voice": "chii"}, headers=AUTH)
+    resp = client.post("/v1/tts/speech", json={"input": "hi", "voice": "chii"}, headers=AUTH)
     assert resp.status_code == 429
     # OpenAI 路径：标准 error 结构 + 稳定 code（此前回 {"message":...} 非协议形）
     assert resp.json()["error"]["code"] == "queue_timeout"
@@ -283,7 +283,7 @@ def test_speech_queue_timeout_openai_error_shape(client, monkeypatch):
 
 def test_speech_queue_timeout_wav_also_openai_shape(client, monkeypatch):
     _jam_inflight(monkeypatch)
-    resp = client.post("/v1/audio/speech",
+    resp = client.post("/v1/tts/speech",
                        json={"input": "テストです", "voice": "chii", "response_format": "wav"},
                        headers=AUTH)
     assert resp.status_code == 429
@@ -302,7 +302,7 @@ def test_tts_queue_timeout_keeps_message_shape(client, monkeypatch):
 
 def test_speech_body_too_large_413(client, fake_engine, monkeypatch):
     monkeypatch.setattr(server, "MAX_BODY_BYTES", 64)
-    resp = client.post("/v1/audio/speech",
+    resp = client.post("/v1/tts/speech",
                        json={"input": "a" * 100, "voice": "chii"}, headers=AUTH)
     assert resp.status_code == 413
     # OpenAI 错误协议 + 稳定 code
@@ -325,7 +325,7 @@ def test_speech_chunked_body_too_large_413(client, fake_engine, monkeypatch):
     def gen():
         yield b'{"input": "' + b"a" * 100 + b'"}'
 
-    resp = client.post("/v1/audio/speech", content=gen(),
+    resp = client.post("/v1/tts/speech", content=gen(),
                        headers={**AUTH, "Content-Type": "application/json"})
     assert resp.status_code == 413
     assert resp.json()["error"]["code"] == "payload_too_large"
@@ -335,7 +335,7 @@ def test_speech_chunked_body_too_large_413(client, fake_engine, monkeypatch):
 def test_speech_body_under_limit_unaffected(client, fake_engine, monkeypatch):
     # 上限内的正常请求不受影响 (此处 cap 远大于请求体)
     monkeypatch.setattr(server, "MAX_BODY_BYTES", 1024)
-    resp = client.post("/v1/audio/speech",
+    resp = client.post("/v1/tts/speech",
                        json={"input": "テストです", "voice": "chii",
                              "response_format": "aac"}, headers=AUTH)
     assert resp.status_code == 200

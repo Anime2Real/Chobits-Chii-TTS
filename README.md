@@ -260,13 +260,13 @@ OpenAI TTS 兼容调用（推荐；在服务器本机验证用 `http://127.0.0.1
 subtype，libsndfile 默认编码为 Vorbis，即拿到的是 Ogg/Vorbis 而非 Opus）。`wav` 为流式输出（边合成边推流，首字延迟低；多句文本
 由门面按句串行合成并合并 PCM 流，规避引擎流式模式多片段并行批推理会截断音频的 bug，
 且上游在产出音频前失败时返回 502 而非 200 空流）；`aac`/`opus` 为合成完成后一次性返回。
-`wav` 流式另有一个 query 开关 `?stream=1`（即 `POST /v1/audio/speech?stream=1`）：改走「整句缓冲后
+`wav` 流式另有一个 query 开关 `?stream=1`（即 `POST /v1/tts/speech?stream=1`）：改走「整句缓冲后
 逐句 RMS 响度归一」路径，句间响度更一致、音量只增不减（默认路径不做响度归一，音量原样跟随引擎，
 故两条路径听感响度可能不同），代价是每句要等整句合成完才下发；若首块只含 WAV 头且其余句子
 皆空流，该路径返回 200 空 body 而非 502（状态行先于 body 发出，无法追改）：
 
 ```bash
-curl -X POST http://127.0.0.1:9880/v1/audio/speech \
+curl -X POST http://127.0.0.1:9880/v1/tts/speech \
   -H "Authorization: Bearer <API_KEY>" \
   -H 'Content-Type: application/json' \
   -d '{"model": "chii-tts", "input": "ちぃ、秀樹のこと、大好き。", "voice": "chii"}' \
@@ -289,8 +289,8 @@ curl -G http://127.0.0.1:9880/tts \
 ```
 
 其他环境变量：`CHII_TTS_BIND`（门面监听地址，默认 `127.0.0.1`；不经 Caddy 直接对外须配下方 SSL env，否则非回环绑定拒绝启动）；
-`CHII_TTS_RATE_LIMIT`（`/tts` 与 `/v1/audio/speech` 每 IP 每分钟限流次数，默认 60，0 关闭）；
-`CHII_TTS_MAX_BODY_BYTES`（`/tts` POST 与 `/v1/audio/speech` 请求体大小上限，默认 25MB，
+`CHII_TTS_RATE_LIMIT`（`/tts` 与 `/v1/tts/speech` 每 IP 每分钟限流次数，默认 60，0 关闭）；
+`CHII_TTS_MAX_BODY_BYTES`（`/tts` POST 与 `/v1/tts/speech` 请求体大小上限，默认 25MB，
 超限 413；uvicorn/Caddy 无默认 cap，不设防时超大 JSON 会吃内存）；
 `CHII_TTS_ENGINE_URL`（引擎地址，默认 `http://127.0.0.1:9882`）；
 `CHII_TTS_SSL_CERTFILE` / `CHII_TTS_SSL_KEYFILE`（同时设置时以 HTTPS 启动）；
