@@ -142,7 +142,7 @@ python3 -m http.server 8768
 
 ## 生产参考切换
 
-生产实际引擎：`chobits-tts-cosy-engine.service`，CosyVoice3 SFT，端口 3301；门面 `chobits-tts-cosy-facade.service`，端口 3300。（2026-11-15 晚已按 `chobits-tts-<provider>-<role>` 规范改名。）
+生产实际引擎：`chobits-tts-cosy-engine.service`，CosyVoice3 旧 SFT（`model.chii-sft-20261115-170330`），端口 3301；门面 `chobits-tts-cosy-facade.service`，端口 3300。（2026-11-15 晚已按 `chobits-tts-<provider>-<role>` 规范改名。）
 
 - CosyVoice shim 接受 `seed` 字段但**忽略**，所以生产不存在 seed46 参数。
 - 2026-11-15 15:51 已将生产参考从原 `秀樹は地位を拾ってくれた` 切换为 ep18：
@@ -151,6 +151,7 @@ python3 -m http.server 8768
   - 备份：同目录 `ref_audio.wav.bak-20261115-155156`、`ref_text.txt.bak-20261115-155156`
 - 已重启 `chobits-tts-cosy-facade`，`/healthz` 返回 `{"status":"ok","model":"chii-tts"}`，`/v1/tts/speech` 实测返回 200 / 1.76s WAV。
 - 生产 CosyVoice A/B（8 句）：当前参考 F0 std/range 121/319，ep18 参考 161/390；ep18 参考的起伏更明显。
+- 2026-11-15 18:24 试听回滚：Cosy 模型回旧 SFT，参考改回 ep07（`ref_cosy_ep07.wav` / `ref_cosy_ep07.txt`）；GPT-SoVITS 继续用 ep18，两套参考分离。
 
 ## 复现命令
 
@@ -243,7 +244,7 @@ python3 -m http.server 8769
 - `holdout_engines/compare.html`
 - `longform_engines/compare.html`
 
-生产当前仍是 CosyVoice3 当前 SFT + ep18 参考；新模型尚未部署。生产引擎在评测期间临时停止，已恢复并用 `/v1/tts/speech` 实测 200。
+生产当前是 CosyVoice3 旧 SFT + ep07 参考；mixed_v3 已试听回滚。生产引擎在评测期间临时停止，已恢复并用 `/v1/tts/speech` 实测 200。
 
 ### 生产切换（2026-11-15 17:03）
 
