@@ -48,9 +48,13 @@ T4 服务器上 TTS 容器常驻 ~3.7–4GB 显存，若换 Genie 可全部让�
 
 ## 📄 许可协议
 
-本项目的派生内容遵循数据集的 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans)（署名-非商业性使用-相同方式共享）协议。
+本仓库采用「严格非商用 + 双授权」，**不是 OSI 开源**。
 
-Genie-TTS 与 GPT-SoVITS 遵循其各自上游许可。
+- **代码**：PolyForm Noncommercial 1.0.0，见 [LICENSE](./LICENSE)。
+- **数据 / 模型权重**：CC BY-NC-SA 4.0，见 [LICENSE-DATA](./LICENSE-DATA) 与 [MODEL-TERMS.md](./MODEL-TERMS.md)。
+- **商业使用**：公开许可不允许商业使用；如需商用，请通过 [COMMERCIAL.md](./COMMERCIAL.md) 联系。
+- **历史版本**：此前版本的授权继续有效，见 [LICENSE-HISTORY.md](./LICENSE-HISTORY.md)。
+- **第三方素材 / 角色 IP**：不适用上述许可，见 [ASSETS.md](./ASSETS.md) / [NOTICE](./NOTICE)。
 
 ## ⚠️ 免责声明
 
